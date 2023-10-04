@@ -185,6 +185,11 @@ void su::set_proportions(TFloat* __restrict__ props,
        if (normalize) {
 #pragma omp parallel for schedule(static)
         for(unsigned int i = 0; i < table.n_samples; i++) {
+            if (sample_counts[i] == 0) {
+                props[i] = props[i] > 0 ?  std::numeric_limits<double>::max() :
+                    std::numeric_limits<double>::lowest();
+                continue;
+            }
            props[i] /= sample_counts[i];
         }
        }
