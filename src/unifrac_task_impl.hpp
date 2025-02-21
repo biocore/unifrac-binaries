@@ -119,26 +119,6 @@ static inline void compute_stripes_totals_T(
 }
 
 
-#if defined(_OPENACC) || defined(OMPGPU)
-// will not use popcnt for accelerated compute
-#else
-// popcnt returns number of bits set to 1, if supported by fast HW compute
-// else return 0 when v is 0 and max-bits else
-// Note: The user of popcnt in this file must be able to use this modified semantics
-
-#if __AVX__
-#include <immintrin.h>
-static inline int32_t popcnt_u32(uint32_t v) {return  _mm_popcnt_u32(v);}
-static inline int64_t popcnt_u64(uint64_t v) {return  _mm_popcnt_u64(v);}
-#else
-static inline int32_t popcnt_u32(uint32_t v) {return (v==0) ? 0 : 32;}
-static inline int64_t popcnt_u64(uint64_t v) {return (v==0) ? 0 : 64;}
-// For future non-x86 ports, see https://barakmich.dev/posts/popcnt-arm64-go-asm/
-// and https://stackoverflow.com/questions/38113284/whats-the-difference-between-builtin-popcountll-and-mm-popcnt-u64
-#endif
-
-#endif
-
 // check for zero values and pre-compute single column sums
 template<class TFloat>
 static inline void WeightedZerosAndSums(
@@ -146,15 +126,33 @@ static inline void WeightedZerosAndSums(
                       TFloat * const __restrict__ sums,
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t n_samples,
                       const uint64_t n_samples_r) {
+#if !(defined(_OPENACC) || defined(OMPGPU))
+// CPU version uses transposed embedded_proportions
+#pragma omp parallel for default(shared)
+    for(uint64_t k=0; k<n_samples; k++) {
+            bool all_zeros=true;
+            const uint64_t offset = embs_stripe*k;
+            TFloat my_sum = 0.0;
+
+            for (uint64_t emb=0; emb<filled_embs; emb++) {
+                TFloat u1 = embedded_proportions[offset + emb];
+                my_sum += u1*lengths[emb];
+                all_zeros = all_zeros && (u1==0.0);
+            }
+
+            sums[k]     = my_sum;
+            zcheck[k] = all_zeros;
+    }
+#else
+// GPU version uses straight embedded_proportions
 #if defined(OMPGPU)
 #pragma omp target teams distribute parallel for simd default(shared)
-#elif defined(_OPENACC)
-#pragma acc parallel loop gang vector present(embedded_proportions,lengths,zcheck,sums)
 #else
-#pragma omp parallel for default(shared)
+#pragma acc parallel loop gang vector present(embedded_proportions,lengths,zcheck,sums)
 #endif
     for(uint64_t k=0; k<n_samples; k++) {
             bool all_zeros=true;
@@ -174,6 +172,7 @@ static inline void WeightedZerosAndSums(
             sums[k]     = my_sum;
             zcheck[k] = all_zeros;
     }
+#endif
 }
 
 // Single step in computing Weighted part of Unifrac
@@ -181,12 +180,29 @@ template<class TFloat>
 static inline TFloat WeightedVal1(
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t n_samples_r,
                       const uint64_t k,
                       const uint64_t l1) {
             TFloat my_stripe = 0.0;
+#if !(defined(_OPENACC) || defined(OMPGPU))
+// CPU version uses transposed embedded_proportions
+            const uint64_t offset_k = embs_stripe*k;
+            const uint64_t offset_l = embs_stripe*l1;
 
+#pragma omp simd reduction(+:my_stripe)
+            for (uint64_t emb=0; emb<filled_embs; emb++) {
+                TFloat u1 = embedded_proportions[offset_k + emb];
+                TFloat v1 = embedded_proportions[offset_l + emb];
+                TFloat diff1 = u1 - v1;
+                TFloat length = lengths[emb];
+
+                my_stripe     += fabs(diff1) * length;
+            } // for emb
+
+#else
+// GPU sticks with the straight layout
             for (uint64_t emb=0; emb<filled_embs; emb++) {
                 const uint64_t offset = n_samples_r * emb;
 
@@ -197,135 +213,11 @@ static inline TFloat WeightedVal1(
 
                 my_stripe     += fabs(diff1) * length;
             } // for emb
+#endif
 
             return my_stripe;
 }
 
-#if !(defined(_OPENACC) || defined(OMPGPU))
-template<class TFloat>
-static inline void WeightedVal4(
-                      TFloat * const __restrict__ stripes,
-                      const TFloat * const __restrict__ embedded_proportions,
-                      const TFloat * __restrict__ lengths,
-                      const unsigned int filled_embs,
-                      const uint64_t n_samples_r,
-                      const uint64_t ks,
-                      const uint64_t ls) {
-            TFloat my_stripe0 = 0.0;
-            TFloat my_stripe1 = 0.0;
-            TFloat my_stripe2 = 0.0;
-            TFloat my_stripe3 = 0.0;
-
-            for (uint64_t emb=0; emb<filled_embs; emb++) {
-                const uint64_t offset = n_samples_r * emb;
-
-                TFloat u0 = embedded_proportions[offset + ks];
-                TFloat u1 = embedded_proportions[offset + ks + 1];
-                TFloat u2 = embedded_proportions[offset + ks + 2];
-                TFloat u3 = embedded_proportions[offset + ks + 3];
-                TFloat v0 = embedded_proportions[offset + ls];
-                TFloat v1 = embedded_proportions[offset + ls + 1];
-                TFloat v2 = embedded_proportions[offset + ls + 2];
-                TFloat v3 = embedded_proportions[offset + ls + 3];
-                TFloat length = lengths[emb];
-
-                TFloat diff0 = u0 - v0;
-                TFloat diff1 = u1 - v1;
-                TFloat diff2 = u2 - v2;
-                TFloat diff3 = u3 - v3;
-                TFloat absdiff0 = fabs(diff0);
-                TFloat absdiff1 = fabs(diff1);
-                TFloat absdiff2 = fabs(diff2);
-                TFloat absdiff3 = fabs(diff3);
-
-                my_stripe0     += absdiff0 * length;
-                my_stripe1     += absdiff1 * length;
-                my_stripe2     += absdiff2 * length;
-                my_stripe3     += absdiff3 * length;
-            } // for emb
-
-            stripes[ks] += my_stripe0;
-            stripes[ks + 1] += my_stripe1;
-            stripes[ks + 2] += my_stripe2;
-            stripes[ks + 3] += my_stripe3;
-}
-
-template<class TFloat>
-static inline void WeightedVal8(
-                      TFloat * const __restrict__ stripes,
-                      const TFloat * const __restrict__ embedded_proportions,
-                      const TFloat * __restrict__ lengths,
-                      const unsigned int filled_embs,
-                      const uint64_t n_samples_r,
-                      const uint64_t ks,
-                      const uint64_t ls) {
-            TFloat my_stripe0 = 0.0;
-            TFloat my_stripe1 = 0.0;
-            TFloat my_stripe2 = 0.0;
-            TFloat my_stripe3 = 0.0;
-            TFloat my_stripe4 = 0.0;
-            TFloat my_stripe5 = 0.0;
-            TFloat my_stripe6 = 0.0;
-            TFloat my_stripe7 = 0.0;
-
-            for (uint64_t emb=0; emb<filled_embs; emb++) {
-                const uint64_t offset = n_samples_r * emb;
-
-                TFloat u0 = embedded_proportions[offset + ks];
-                TFloat u1 = embedded_proportions[offset + ks + 1];
-                TFloat u2 = embedded_proportions[offset + ks + 2];
-                TFloat u3 = embedded_proportions[offset + ks + 3];
-                TFloat u4 = embedded_proportions[offset + ks + 4];
-                TFloat u5 = embedded_proportions[offset + ks + 5];
-                TFloat u6 = embedded_proportions[offset + ks + 6];
-                TFloat u7 = embedded_proportions[offset + ks + 7];
-                TFloat v0 = embedded_proportions[offset + ls];
-                TFloat v1 = embedded_proportions[offset + ls + 1];
-                TFloat v2 = embedded_proportions[offset + ls + 2];
-                TFloat v3 = embedded_proportions[offset + ls + 3];
-                TFloat v4 = embedded_proportions[offset + ls + 4];
-                TFloat v5 = embedded_proportions[offset + ls + 5];
-                TFloat v6 = embedded_proportions[offset + ls + 6];
-                TFloat v7 = embedded_proportions[offset + ls + 7];
-                TFloat length = lengths[emb];
-
-                TFloat diff0 = u0 - v0;
-                TFloat diff1 = u1 - v1;
-                TFloat diff2 = u2 - v2;
-                TFloat diff3 = u3 - v3;
-                TFloat diff4 = u4 - v4;
-                TFloat diff5 = u5 - v5;
-                TFloat diff6 = u6 - v6;
-                TFloat diff7 = u7 - v7;
-                TFloat absdiff0 = fabs(diff0);
-                TFloat absdiff1 = fabs(diff1);
-                TFloat absdiff2 = fabs(diff2);
-                TFloat absdiff3 = fabs(diff3);
-                TFloat absdiff4 = fabs(diff4);
-                TFloat absdiff5 = fabs(diff5);
-                TFloat absdiff6 = fabs(diff6);
-                TFloat absdiff7 = fabs(diff7);
-
-                my_stripe0     += absdiff0 * length;
-                my_stripe1     += absdiff1 * length;
-                my_stripe2     += absdiff2 * length;
-                my_stripe3     += absdiff3 * length;
-                my_stripe4     += absdiff4 * length;
-                my_stripe5     += absdiff5 * length;
-                my_stripe6     += absdiff6 * length;
-                my_stripe7     += absdiff7 * length;
-            } // for emb
-
-            stripes[ks] += my_stripe0;
-            stripes[ks + 1] += my_stripe1;
-            stripes[ks + 2] += my_stripe2;
-            stripes[ks + 3] += my_stripe3;
-            stripes[ks + 4] += my_stripe4;
-            stripes[ks + 5] += my_stripe5;
-            stripes[ks + 6] += my_stripe6;
-            stripes[ks + 7] += my_stripe7;
-}
-#endif
 
 // Single step in computing NormalizedWeighted Unifrac
 template<class TFloat>
@@ -335,6 +227,7 @@ static inline void UnnormalizedWeighted1(
                       const TFloat * const __restrict__ sums,
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t idx,
                       const uint64_t n_samples_r,
@@ -360,7 +253,7 @@ static inline void UnnormalizedWeighted1(
           } else {
             // both sides non zero, use the explicit but slow approach
             my_stripe = WeightedVal1(embedded_proportions, lengths,
-                                     filled_embs, n_samples_r,
+                                     embs_stripe, filled_embs, n_samples_r,
                                      k, l1);
           }
 
@@ -381,6 +274,7 @@ static inline void UnnormalizedWeighted4(
                       const TFloat * const __restrict__ sums,
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t idx,
                       const uint64_t n_samples_r,
@@ -390,10 +284,6 @@ static inline void UnnormalizedWeighted4(
        const uint32_t z_l = ((const uint32_t *)(zcheck+ls))[0];
        const bool allzero_k = z_k==0x01010101;
        const bool allzero_l = z_l==0x01010101;
-
-       // popcnt is cheap but has large latency, so compute speculatively/early
-       const int32_t cnt_k = popcnt_u32(z_k);
-       const int32_t cnt_l = popcnt_u32(z_l);
 
        if (allzero_k && allzero_l) {
          // nothing to do, would have to add 0
@@ -424,22 +314,13 @@ static inline void UnnormalizedWeighted4(
              dm_stripe[ks+2] += sum_k2;
              dm_stripe[ks+3] += sum_k3;
           }
-       } else if ((cnt_k<3) && (cnt_l<3)) {
-          // several of the elemens are nonzero, may as well use the vectorized version
-          TFloat * const __restrict__ dm_stripe = dm_stripes_buf+idx;
-          //TFloat *dm_stripe = dm_stripes[stripe];
-
-          WeightedVal4(dm_stripe,
-                       embedded_proportions, lengths,
-                       filled_embs, n_samples_r,
-                       ks, ls);
        } else {
          // only a few have both sides partially non zero, use the fine grained compute
          for (uint64_t i=0; i<4; i++) {
             UnnormalizedWeighted1<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe,filled_embs,idx, n_samples_r,
                                    ks+i, ls+i);
          }
        } // (allzero_k && allzero_l)
@@ -452,6 +333,7 @@ static inline void UnnormalizedWeighted8(
                       const TFloat * const __restrict__ sums,
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t idx,
                       const uint64_t n_samples_r,
@@ -461,10 +343,6 @@ static inline void UnnormalizedWeighted8(
        const uint64_t z_l = ((const uint64_t *)(zcheck+ls))[0];
        const bool allzero_k = z_k==0x0101010101010101;
        const bool allzero_l = z_l==0x0101010101010101;
-
-       // popcnt is cheap but has large latency, so compute speculatively/early
-       const int64_t cnt_k = popcnt_u64(z_k);
-       const int64_t cnt_l = popcnt_u64(z_l);
 
        if (allzero_k && allzero_l) {
          // nothing to do, would have to add 0
@@ -511,22 +389,13 @@ static inline void UnnormalizedWeighted8(
              dm_stripe[ks+6] += sum_k6;
              dm_stripe[ks+7] += sum_k7;
           } 
-       } else if ((cnt_k<6) && (cnt_l<6)) {
-          // several of the elemens are nonzero, may as well use the vectorized version
-          TFloat * const __restrict__ dm_stripe = dm_stripes_buf+idx;
-          //TFloat *dm_stripe = dm_stripes[stripe];
-
-          WeightedVal8(dm_stripe,
-                       embedded_proportions, lengths,
-                       filled_embs, n_samples_r,
-                       ks, ls);
        } else {
-         // only a few have both sides partially non zero, use the fine grained compute
-         for (uint64_t i=0; i<8; i++) {
-            UnnormalizedWeighted1<TFloat>(
+         // only a few have both sides partially non zero, use the finer grained compute
+         for (uint64_t i=0; i<8; i+=4) {
+            UnnormalizedWeighted4<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe, filled_embs,idx, n_samples_r,
                                    ks+i, ls+i);
          }
        } // (allzero_k && allzero_l)
@@ -535,7 +404,7 @@ static inline void UnnormalizedWeighted8(
 
 template<class TFloat>
 static inline void run_UnnormalizedWeightedTask_T(
-		const unsigned int filled_embs,
+		const uint64_t embs_stripe, const unsigned int filled_embs,
 		const uint64_t start_idx, const uint64_t stop_idx,
 		const uint64_t n_samples, const uint64_t n_samples_r,
 		const TFloat * const __restrict__ lengths,
@@ -550,16 +419,15 @@ static inline void run_UnnormalizedWeightedTask_T(
     // check for zero values and pre-compute single column sums
     WeightedZerosAndSums(zcheck, sums,
                          embedded_proportions, lengths,
-                         filled_embs, n_samples, n_samples_r);
+                         embs_stripe, filled_embs, n_samples, n_samples_r);
 
     // now do the real compute
 #if defined(_OPENACC) || defined(OMPGPU)
-    // Use as big vector size as we can, to maximize cache line reuse
 #if defined(OMPGPU)
     // TODO: Explore async omp target
-#pragma omp target teams distribute parallel for simd collapse(3) simdlen( SUCMP_ACC_MAXVEC ) default(shared)
+#pragma omp target teams distribute parallel for simd collapse(3) default(shared)
 #else
-#pragma acc parallel loop gang vector collapse(3) vector_length( SUCMP_ACC_MAXVEC ) present(embedded_proportions,dm_stripes_buf,lengths,zcheck,sums) async
+#pragma acc parallel loop gang vector collapse(3) present(embedded_proportions,dm_stripes_buf,lengths,zcheck,sums) async
 #endif
     for(uint64_t sk = 0; sk < sample_steps ; sk++) {
      for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
@@ -575,7 +443,7 @@ static inline void run_UnnormalizedWeightedTask_T(
        UnnormalizedWeighted1<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe, filled_embs,idx, n_samples_r,
                                    k, l1);
       } // for ik
      } // for stripe
@@ -604,7 +472,7 @@ static inline void run_UnnormalizedWeightedTask_T(
        UnnormalizedWeighted8<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe, filled_embs,idx, n_samples_r,
                                    ks, ls);
        ks+=8;
        ls = (ls + 8)%n_samples; // wraparound
@@ -614,7 +482,7 @@ static inline void run_UnnormalizedWeightedTask_T(
        UnnormalizedWeighted4<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe, filled_embs,idx, n_samples_r,
                                    ks, ls);
        ks+=4;
        ls = (ls + 4)%n_samples; // wraparound
@@ -625,7 +493,7 @@ static inline void run_UnnormalizedWeightedTask_T(
        UnnormalizedWeighted1<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe, filled_embs,idx, n_samples_r,
                                    ks, ls);
        ls = (ls + 1)%n_samples; // wraparound
       } // for ks
@@ -715,6 +583,7 @@ static inline void NormalizedWeighted1(
                       const TFloat * const __restrict__ sums,
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t idx,
                       const uint64_t n_samples_r,
@@ -748,7 +617,7 @@ static inline void NormalizedWeighted1(
           } else {
             // both sides non zero, use the explicit but slow approach
             my_stripe = WeightedVal1(embedded_proportions, lengths,
-                                     filled_embs, n_samples_r,
+                                     embs_stripe, filled_embs, n_samples_r,
                                      k, l1);
           }
 
@@ -767,6 +636,7 @@ static inline void NormalizedWeighted4(
                       const TFloat * const __restrict__ sums,
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t idx,
                       const uint64_t n_samples_r,
@@ -794,9 +664,6 @@ static inline void NormalizedWeighted4(
           const TFloat sum_kl2 = sum_k2 + sum_l2;
           const TFloat sum_kl3 = sum_k3 + sum_l3;
 
-          int32_t cnt_k = 0;
-          int32_t cnt_l = 0;
-
           TFloat * const __restrict__ dm_stripe = dm_stripes_buf+idx;
           //TFloat *dm_stripe = dm_stripes[stripe];
 
@@ -814,10 +681,6 @@ static inline void NormalizedWeighted4(
              dm_stripe[ks+1] += sum_k1;
              dm_stripe[ks+2] += sum_k2;
              dm_stripe[ks+3] += sum_k3;
-          } else {
-             // popcnt is cheap but has large latency, so compute early
-             cnt_k = popcnt_u32(z_k);
-             cnt_l = popcnt_u32(z_l);
           }
 
           // the totals can always use the distributed property
@@ -832,23 +695,13 @@ static inline void NormalizedWeighted4(
 
           if (allzero_k||allzero_l) {
              // already done
-          } else if ((cnt_k<3) && (cnt_l<3)) {
-             // several of the elemens are nonzero, may as well use the vectorized version
-             TFloat * const __restrict__ dm_stripe = dm_stripes_buf+idx;
-             //TFloat *dm_stripe = dm_stripes[stripe];
-
-             WeightedVal4(dm_stripe,
-                       embedded_proportions, lengths,
-                       filled_embs, n_samples_r,
-                       ks, ls);
           } else {
-             // only a few have both sides partially non zero, use the fine grained compute
              // Use UnnormalizedWeighted since we already computed dm_stripe_total
              for (uint64_t i=0; i<4; i++) {
                 UnnormalizedWeighted1<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe,filled_embs,idx, n_samples_r,
                                    ks+i, ls+i);
              }
           }
@@ -863,6 +716,7 @@ static inline void NormalizedWeighted8(
                       const TFloat * const __restrict__ sums,
                       const TFloat * const __restrict__ embedded_proportions,
                       const TFloat * __restrict__ lengths,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs,
                       const uint64_t idx,
                       const uint64_t n_samples_r,
@@ -902,9 +756,6 @@ static inline void NormalizedWeighted8(
           const TFloat sum_kl6 = sum_k6 + sum_l6;
           const TFloat sum_kl7 = sum_k7 + sum_l7;
 
-          int32_t cnt_k = 0;
-          int32_t cnt_l = 0;
-
           TFloat * const __restrict__ dm_stripe = dm_stripes_buf+idx;
           //TFloat *dm_stripe = dm_stripes[stripe];
 
@@ -930,10 +781,6 @@ static inline void NormalizedWeighted8(
              dm_stripe[ks+5] += sum_k5;
              dm_stripe[ks+6] += sum_k6;
              dm_stripe[ks+7] += sum_k7;
-          } else {
-             // popcnt is cheap but has large latency, so compute early
-             cnt_k = popcnt_u64(z_k);
-             cnt_l = popcnt_u64(z_l);
           }
 
           // the totals can always use the distributed property
@@ -952,23 +799,13 @@ static inline void NormalizedWeighted8(
 
           if (allzero_k||allzero_l) {
              // already done
-          } else if ((cnt_k<6) && (cnt_l<6)) {
-             // several of the elemens are nonzero, may as well use the vectorized version
-             TFloat * const __restrict__ dm_stripe = dm_stripes_buf+idx;
-             //TFloat *dm_stripe = dm_stripes[stripe];
-
-             WeightedVal8(dm_stripe,
-                       embedded_proportions, lengths,
-                       filled_embs, n_samples_r,
-                       ks, ls);
           } else {
-             // only a few have both sides partially non zero, use the fine grained compute
              // Use UnnormalizedWeighted since we already computed dm_stripe_total
-             for (uint64_t i=0; i<8; i++) {
-                UnnormalizedWeighted1<TFloat>(
+             for (uint64_t i=0; i<8; i+=4) {
+                UnnormalizedWeighted4<TFloat>(
                                    dm_stripes_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe,filled_embs,idx, n_samples_r,
                                    ks+i, ls+i);
              }
           }
@@ -978,6 +815,7 @@ static inline void NormalizedWeighted8(
 
 template<class TFloat>
 static inline void run_NormalizedWeightedTask_T(
+                const uint64_t embs_stripe,
 		const unsigned int filled_embs,
 		const uint64_t start_idx, const uint64_t stop_idx,
 		const uint64_t n_samples, const uint64_t n_samples_r,
@@ -994,16 +832,15 @@ static inline void run_NormalizedWeightedTask_T(
     // check for zero values and pre-compute single column sums
     WeightedZerosAndSums(zcheck, sums,
                          embedded_proportions, lengths,
-                         filled_embs, n_samples, n_samples_r);
+                         embs_stripe,filled_embs, n_samples, n_samples_r);
 
     // point of thread
 #if defined(_OPENACC) || defined(OMPGPU)
-    // Use as big vector size as we can, to maximize cache line reuse
 #if defined(OMPGPU)
     // TODO: Explore async omp target
-#pragma omp target teams distribute parallel for simd collapse(3) simdlen( SUCMP_ACC_MAXVEC ) default(shared)
+#pragma omp target teams distribute parallel for simd collapse(3) default(shared)
 #else
-#pragma acc parallel loop gang vector collapse(3) vector_length( SUCMP_ACC_MAXVEC ) present(embedded_proportions,dm_stripes_buf,dm_stripes_total_buf,lengths,zcheck,sums) async
+#pragma acc parallel loop gang vector collapse(3) present(embedded_proportions,dm_stripes_buf,dm_stripes_total_buf,lengths,zcheck,sums) async
 #endif
     for(uint64_t sk = 0; sk < sample_steps ; sk++) {
      for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
@@ -1019,7 +856,7 @@ static inline void run_NormalizedWeightedTask_T(
        NormalizedWeighted1<TFloat>(
                                    dm_stripes_buf,dm_stripes_total_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe,filled_embs,idx, n_samples_r,
                                    k, l1);
       } // for ik
      } // for stripe
@@ -1048,7 +885,7 @@ static inline void run_NormalizedWeightedTask_T(
        NormalizedWeighted8<TFloat>(
                                    dm_stripes_buf,dm_stripes_total_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe,filled_embs,idx, n_samples_r,
                                    ks, ls);
        ks+=8;
        ls = (ls + 8)%n_samples; // wraparound
@@ -1058,7 +895,7 @@ static inline void run_NormalizedWeightedTask_T(
        NormalizedWeighted4<TFloat>(
                                    dm_stripes_buf,dm_stripes_total_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe,filled_embs,idx, n_samples_r,
                                    ks, ls);
        ks+=4;
        ls = (ls + 4)%n_samples; // wraparound
@@ -1069,7 +906,7 @@ static inline void run_NormalizedWeightedTask_T(
        NormalizedWeighted1<TFloat>(
                                    dm_stripes_buf,dm_stripes_total_buf,
                                    zcheck, sums, embedded_proportions, lengths,
-                                   filled_embs,idx, n_samples_r,
+                                   embs_stripe,filled_embs,idx, n_samples_r,
                                    ks, ls);
        ls = (ls + 1)%n_samples; // wraparound
       } // for ks
@@ -1159,6 +996,7 @@ static inline void run_VawNormalizedWeightedTask_T(
 
 template<class TFloat>
 static inline void run_GeneralizedTask_T(
+                const uint64_t embs_stripe,
 		const unsigned int filled_embs,
 		const uint64_t start_idx, const uint64_t stop_idx,
 		const uint64_t n_samples, const uint64_t n_samples_r,
@@ -1167,22 +1005,65 @@ static inline void run_GeneralizedTask_T(
 		TFloat * const __restrict__ dm_stripes_buf,
 		TFloat * const __restrict__ dm_stripes_total_buf,
 		const TFloat g_unifrac_alpha) {
-
     constexpr uint64_t step_size = STEP_SIZE(TFloat);
     const uint64_t sample_steps = (n_samples+(step_size-1))/step_size; // round up
 
+#if !(defined(_OPENACC) || defined(OMPGPU))
+    // CPU version uses transposed embedded_proportions
+
     // point of thread
-#if defined(_OPENACC) || defined(OMPGPU)
+#pragma omp parallel for schedule(dynamic,1) default(shared)
+    for(uint64_t sk = 0; sk < sample_steps ; sk++) {
+      for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
+        for(uint64_t ik = 0; ik < step_size ; ik++) {
+            const uint64_t k = sk*step_size + ik;
+            const uint64_t idx = (stripe-start_idx) * n_samples_r;
+            TFloat * const __restrict__ dm_stripe = dm_stripes_buf+idx;
+            TFloat * const __restrict__ dm_stripe_total = dm_stripes_total_buf+idx;
+            //TFloat *dm_stripe = dm_stripes[stripe];
+            //TFloat *dm_stripe_total = dm_stripes_total[stripe];
+
+            if (k>=n_samples) continue; // past the limit
+
+            const uint64_t l1 = (k + stripe + 1)%n_samples; // wraparound
+
+            TFloat my_stripe = dm_stripe[k];
+            TFloat my_stripe_total = dm_stripe_total[k];
+
+            const uint64_t offset_k = embs_stripe*k;
+            const uint64_t offset_l = embs_stripe*l1;
+            for (uint64_t emb=0; emb<filled_embs; emb++) {
+                TFloat u1 = embedded_proportions[offset_k + emb];
+                TFloat v1 = embedded_proportions[offset_l + emb];
+                TFloat sum1 = u1 + v1;
+
+                if(sum1 != 0.0) { 
+                   TFloat length = lengths[emb];
+                   TFloat diff1 = fabs(u1 - v1);
+                   TFloat sum_pow1 = pow(sum1, g_unifrac_alpha) * length; 
+
+                   my_stripe += sum_pow1 * (diff1 / sum1); 
+                   my_stripe_total += sum_pow1; 
+                }
+            }
+
+            dm_stripe[k]     = my_stripe;
+            dm_stripe_total[k]     = my_stripe_total;
+
+        }
+
+      }
+    }
+#else
+    // GPU version uses straight embedded_proportions
+
+    // point of thread
     // Use as big vector size as we can, to maximize cache line reuse
 #if defined(OMPGPU)
     // TODO: Explore async omp target
 #pragma omp target teams distribute parallel for simd collapse(3) simdlen( SUCMP_ACC_MAXVEC ) default(shared)
 #else
 #pragma acc parallel loop collapse(3) vector_length( SUCMP_ACC_MAXVEC ) present(embedded_proportions,dm_stripes_buf,dm_stripes_total_buf,lengths) async
-#endif
-
-#else
-#pragma omp parallel for schedule(dynamic,1) default(shared)
 #endif
     for(uint64_t sk = 0; sk < sample_steps ; sk++) {
       for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
@@ -1228,6 +1109,7 @@ static inline void run_GeneralizedTask_T(
 
       }
     }
+#endif
 }
 
 template<class TFloat>
@@ -1317,67 +1199,50 @@ static inline void UnweightedOneSide(
                       TFloat * const  __restrict__ stripe_sums,
                       const TFloat * const   __restrict__ sums,
                       const uint64_t * const __restrict__ embedded_proportions,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs_els_round,
                       const uint64_t n_samples_r,
                       const uint64_t kl) {
             bool all_zeros=true;
             TFloat my_stripe = 0.0;
 
+#if !(defined(_OPENACC) || defined(OMPGPU))
+            // CPUs use transposed layout
+            const uint64_t offset = embs_stripe*kl;
+#endif
             for (uint64_t emb_el=0; emb_el<filled_embs_els_round; emb_el++) {
-                const uint64_t offset = n_samples_r * emb_el;
                 const TFloat * __restrict__ psum = &(sums[emb_el*0x800]);
 
+#if !(defined(_OPENACC) || defined(OMPGPU))
+		// CPUs use transposed layout
+                uint64_t o1 = embedded_proportions[offset + emb_el];
+#else
+                const uint64_t offset = n_samples_r * emb_el;
                 uint64_t o1 = embedded_proportions[offset + kl];
+#endif
 
                 if (o1==0) {  // zeros are prevalent
                     // nothing to do
                 } else {
-                 all_zeros = false;
+                    all_zeros = false;
+                    // Use the pre-computed sums
+                    // Each range of 8 lengths has already been pre-computed and stored in psum
+                    // Since embedded_proportions packed format is in 64-bit format for performance reasons
+                    //    we need to add the 8 sums using the four 8-bits for addressing inside psum
+
 #if !(defined(_OPENACC) || defined(OMPGPU))
-                 // CPU/SIMD faster if we check for partial compute
-                 if (((uint32_t)o1)==0) {
-                    // only high part relevant
-                    //uint64_t x1 = u1 ^ v1;
-                    // With one of the two being 0, xor is just the non-negative one
-
-                    // Use the pre-computed sums
-                    // Each range of 8 lengths has already been pre-computed and stored in psum
-                    // Since embedded_proportions packed format is in 64-bit format for performance reasons
-                    //    we need to add the 8 sums using the four 8-bits for addressing inside psum
-
-                    TFloat esum      = psum[0x400+((uint8_t)(o1 >> 32))] +
-                                       psum[0x500+((uint8_t)(o1 >> 40))] +
-                                       psum[0x600+((uint8_t)(o1 >> 48))] +
-                                       psum[0x700+((uint8_t)(o1 >> 56))];
-                    my_stripe       += esum;
-                 } else if ((o1>>32)==0) {
-                    // only low part relevant
-                    //uint64_t x1 = u1 ^ v1;
-                    // With one of the two being 0, xor is just the non-negative one
-
-                    // Use the pre-computed sums
-                    // Each range of 8 lengths has already been pre-computed and stored in psum
-                    // Since embedded_proportions packed format is in 64-bit format for performance reasons
-                    //    we need to add the 8 sums using the four 8-bits for addressing inside psum
-
-                    TFloat esum      = psum[       (uint8_t)(o1)       ] + 
-                                       psum[0x100+((uint8_t)(o1 >>  8))] +
-                                       psum[0x200+((uint8_t)(o1 >> 16))] +
-                                       psum[0x300+((uint8_t)(o1 >> 24))];
-                    my_stripe       += esum;
-                 } else {
+                    // CPU/SIMD faster if we check for partial compute
+		    TFloat esum = 0.0;
+		    for (int i=0; i<8; i++) {
+		      uint8_t o1_8 = (uint8_t)(o1);
+                      if (o1_8!=0) {
+                        my_stripe  += psum[(uint8_t)(o1_8)];
+		      }
+		      o1 = o1 >> 8;
+		      psum += 0x100;
+		    }
 #else
-                 // GPU/SIMT faster if we just go ahead will full at all times
-                 {
-#endif
-                    //uint64_t x1 = u1 ^ v1;
-                    // With one of the two being 0, xor is just the non-negative one
-
-                    // Use the pre-computed sums
-                    // Each range of 8 lengths has already been pre-computed and stored in psum
-                    // Since embedded_proportions packed format is in 64-bit format for performance reasons
-                    //    we need to add the 8 sums using the four 8-bits for addressing inside psum
-
+                    // GPU/SIMT faster if we just go ahead will full at all times
                     TFloat esum      = psum[       (uint8_t)(o1)       ] + 
                                        psum[0x100+((uint8_t)(o1 >>  8))] +
                                        psum[0x200+((uint8_t)(o1 >> 16))] +
@@ -1386,8 +1251,8 @@ static inline void UnweightedOneSide(
                                        psum[0x500+((uint8_t)(o1 >> 40))] +
                                        psum[0x600+((uint8_t)(o1 >> 48))] +
                                        psum[0x700+((uint8_t)(o1 >> 56))];
+#endif
                     my_stripe       += esum;
-                 }
                 }
             }
 
@@ -1494,6 +1359,7 @@ static inline void Unweighted1(
                       const TFloat * const   __restrict__ stripe_sums,
                       const TFloat * const   __restrict__ sums,
                       const uint64_t * const __restrict__ embedded_proportions,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs_els_round,
                       const uint64_t idx,
                       const uint64_t n_samples_r,
@@ -1524,56 +1390,18 @@ static inline void Unweighted1(
             did_update = (my_stripe!=0.0);
           } else {
             // we need both sides
+            const uint64_t offset_k = embs_stripe*k;
+            const uint64_t offset_l = embs_stripe*l1;
             for (uint64_t emb_el=0; emb_el<filled_embs_els_round; emb_el++) {
-                const uint64_t offset = n_samples_r * emb_el;
                 const TFloat * __restrict__ psum = &(sums[emb_el*0x800]);
 
-                uint64_t u1 = embedded_proportions[offset + k];
-                uint64_t v1 = embedded_proportions[offset + l1];
+                uint64_t u1 = embedded_proportions[offset_k + emb_el];
+                uint64_t v1 = embedded_proportions[offset_l + emb_el];
                 uint64_t o1 = u1 | v1;
                 uint64_t x1 = u1 ^ v1;
 
                 if (o1==0) {  // zeros are prevalent
                     // nothing to do
-                } else if (((uint32_t)o1)==0) {
-                    // only high part relevant
-                    did_update=true;
-
-                    // Use the pre-computed sums
-                    // Each range of 8 lengths has already been pre-computed and stored in psum
-                    // Since embedded_proportions packed format is in 64-bit format for performance reasons
-                    //    we need to add the 8 sums using the four 8-bits for addressing inside psum
-
-                    if constexpr (compute_total) {
-                    my_stripe_total += psum[0x400+((uint8_t)(o1 >> 32))] +
-                                       psum[0x500+((uint8_t)(o1 >> 40))] +
-                                       psum[0x600+((uint8_t)(o1 >> 48))] +
-                                       psum[0x700+((uint8_t)(o1 >> 56))];
-                    }
-                    my_stripe       += psum[0x400+((uint8_t)(x1 >> 32))] +
-                                       psum[0x500+((uint8_t)(x1 >> 40))] +
-                                       psum[0x600+((uint8_t)(x1 >> 48))] +
-                                       psum[0x700+((uint8_t)(x1 >> 56))];
-                } else if ((o1>>32)==0) {
-                    // only low part relevant
-                    did_update=true;
-
-                    // Use the pre-computed sums
-                    // Each range of 8 lengths has already been pre-computed and stored in psum
-                    // Since embedded_proportions packed format is in 64-bit format for performance reasons
-                    //    we need to add the 8 sums using the four 8-bits for addressing inside psum
-
-                    if constexpr (compute_total) {
-                    my_stripe_total += psum[       (uint8_t)(o1)       ] + 
-                                       psum[0x100+((uint8_t)(o1 >>  8))] +
-                                       psum[0x200+((uint8_t)(o1 >> 16))] +
-                                       psum[0x300+((uint8_t)(o1 >> 24))];
-                    }
-                    my_stripe       += psum[       (uint8_t)(x1)       ] + 
-                                       psum[0x100+((uint8_t)(x1 >>  8))] +
-                                       psum[0x200+((uint8_t)(x1 >> 16))] +
-                                       psum[0x300+((uint8_t)(x1 >> 24))];
-
                 } else {
                     did_update=true;
 
@@ -1581,25 +1409,16 @@ static inline void Unweighted1(
                     // Each range of 8 lengths has already been pre-computed and stored in psum
                     // Since embedded_proportions packed format is in 64-bit format for performance reasons
                     //    we need to add the 8 sums using the four 8-bits for addressing inside psum
-
-                    if constexpr (compute_total) {
-                    my_stripe_total += psum[       (uint8_t)(o1)       ] + 
-                                       psum[0x100+((uint8_t)(o1 >>  8))] +
-                                       psum[0x200+((uint8_t)(o1 >> 16))] +
-                                       psum[0x300+((uint8_t)(o1 >> 24))] +
-                                       psum[0x400+((uint8_t)(o1 >> 32))] +
-                                       psum[0x500+((uint8_t)(o1 >> 40))] +
-                                       psum[0x600+((uint8_t)(o1 >> 48))] +
-                                       psum[0x700+((uint8_t)(o1 >> 56))];
-                    }
-                    my_stripe       += psum[       (uint8_t)(x1)       ] + 
-                                       psum[0x100+((uint8_t)(x1 >>  8))] +
-                                       psum[0x200+((uint8_t)(x1 >> 16))] +
-                                       psum[0x300+((uint8_t)(x1 >> 24))] +
-                                       psum[0x400+((uint8_t)(x1 >> 32))] +
-                                       psum[0x500+((uint8_t)(x1 >> 40))] +
-                                       psum[0x600+((uint8_t)(x1 >> 48))] +
-                                       psum[0x700+((uint8_t)(x1 >> 56))];
+		    for (int i=0; i<8; i++) {
+		      uint8_t o1_8 = (uint8_t)(o1);
+                      if (o1_8!=0) {
+                        if constexpr (compute_total) my_stripe_total += psum[o1_8];
+                        my_stripe       += psum[(uint8_t)(x1)];
+		      }
+		      o1 = o1 >> 8;
+		      x1 = x1 >> 8;
+		      psum += 0x100;
+		    }
                 }
             }
           } // (allzero_k || allzero_l1)
@@ -1622,6 +1441,7 @@ static inline void UnweightedZerosAndSums(
                       TFloat * const  __restrict__ stripe_sums,
                       const TFloat * const   __restrict__ el_sums,
                       const T * const __restrict__ embedded_proportions,
+                      const uint64_t embs_stripe,
                       const unsigned int filled_embs_els_round,
                       const uint64_t n_samples,
                       const uint64_t n_samples_r) {
@@ -1636,13 +1456,14 @@ static inline void UnweightedZerosAndSums(
             UnweightedOneSide(
                       zcheck, stripe_sums,
                       el_sums, embedded_proportions,
-                      filled_embs_els_round, n_samples_r,
+                      embs_stripe, filled_embs_els_round, n_samples_r,
                       k);
     }
 }
 
 template<class TFloat>
 static inline void run_UnweightedTask_T(
+		const uint64_t embs_stripe,
 		const unsigned int filled_embs,
 		const uint64_t start_idx, const uint64_t stop_idx,
 		const uint64_t n_samples, const uint64_t n_samples_r,
@@ -1737,16 +1558,15 @@ static inline void run_UnweightedTask_T(
     // check for zero values and compute stripe sums
     UnweightedZerosAndSums(zcheck, stripe_sums,
                            sums, embedded_proportions,
-                           filled_embs_els_round, n_samples, n_samples_r);
+                           embs_stripe, filled_embs_els_round, n_samples, n_samples_r);
 
     // point of thread
 #if defined(_OPENACC) || defined(OMPGPU)
-    // Use as big vector size as we can, to maximize cache line reuse
 #if defined(OMPGPU)
     // TODO: Explore async omp target
-#pragma omp target teams distribute parallel for simd collapse(3) simdlen( SUCMP_ACC_MAXVEC ) default(shared)
+#pragma omp target teams distribute parallel for simd collapse(3) default(shared)
 #else
-#pragma acc parallel loop collapse(3) gang vector vector_length( SUCMP_ACC_MAXVEC ) present(embedded_proportions,dm_stripes_buf,dm_stripes_total_buf,sums,zcheck,stripe_sums) async
+#pragma acc parallel loop collapse(3) gang vector present(embedded_proportions,dm_stripes_buf,dm_stripes_total_buf,sums,zcheck,stripe_sums) async
 #endif
     for(uint64_t sk = 0; sk < sample_steps ; sk++) {
       for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
@@ -1791,7 +1611,7 @@ static inline void run_UnweightedTask_T(
                                 dm_stripes_buf,dm_stripes_total_buf,
                                 zcheck, stripe_sums,
                                 sums, embedded_proportions,
-                                filled_embs_els_round,idx, n_samples_r,
+                                embs_stripe,filled_embs_els_round,idx, n_samples_r,
                                 k, l1);
            } // if k
          } // for ik
@@ -1804,6 +1624,7 @@ static inline void run_UnweightedTask_T(
 
 template<class TFloat>
 static inline void run_UnnormalizedUnweightedTask_T(
+		const uint64_t embs_stripe,
 		const unsigned int filled_embs,
 		const uint64_t start_idx, const uint64_t stop_idx,
 		const uint64_t n_samples, const uint64_t n_samples_r,
@@ -1897,16 +1718,15 @@ static inline void run_UnnormalizedUnweightedTask_T(
     // check for zero values and compute stripe sums
     UnweightedZerosAndSums(zcheck, stripe_sums,
                            sums, embedded_proportions,
-                           filled_embs_els_round, n_samples, n_samples_r);
+                           embs_stripe, filled_embs_els_round, n_samples, n_samples_r);
 
     // point of thread
 #if defined(_OPENACC) || defined(OMPGPU)
-    // Use as big vector size as we can, to maximize cache line reuse
 #if defined(OMPGPU)
     // TODO: Explore async omp target
-#pragma omp target teams distribute parallel for simd collapse(3) simdlen( SUCMP_ACC_MAXVEC ) default(shared)
+#pragma omp target teams distribute parallel for simd collapse(3) default(shared)
 #else
-#pragma acc parallel loop collapse(3) gang vector vector_length( SUCMP_ACC_MAXVEC ) present(embedded_proportions,dm_stripes_buf,sums,zcheck,stripe_sums) async
+#pragma acc parallel loop collapse(3) gang vector present(embedded_proportions,dm_stripes_buf,sums,zcheck,stripe_sums) async
 #endif
     for(uint64_t sk = 0; sk < sample_steps ; sk++) {
       for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
@@ -1951,7 +1771,7 @@ static inline void run_UnnormalizedUnweightedTask_T(
                                 dm_stripes_buf,NULL,
                                 zcheck, stripe_sums,
                                 sums, embedded_proportions,
-                                filled_embs_els_round,idx, n_samples_r,
+                                embs_stripe,filled_embs_els_round,idx, n_samples_r,
                                 k, l1);
            } // if k
          } // for ik

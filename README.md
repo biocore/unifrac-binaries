@@ -55,14 +55,6 @@ conda activate unifrac
 
 To install, first the binary needs to be compiled. This assumes that the HDF5 toolchain and libraries are available.
 
-Assuming `h5c++` is in your path, the following should work:
-
-```
-make clean && make api && make main 
-#optionally
-make install
-```
-
 
 **Note**: if you are using [conda](https://docs.anaconda.com/miniconda/) we recommend installing HDF5 and related compiler using the
 `conda-forge` channel, for example:
@@ -81,13 +73,40 @@ conda activate unifrac-binaries
 ```
 
 For NVIDIA-GPU-enabled code, you will need the [NVIDIA HPC SDK](https://developer.nvidia.com/hpc-sdk) compiler, and is only supported on Linux.
+The NVIDIA GPU compilation requires the setting of the `NV_CXX` environment variable.
+
 This helper script will download it, install it and setup the necessary environment:
 ```
 scripts/install_hpc_sdk.sh 
-source setup_nv_h5.sh
+source setup_nv_compiler.sh
 ```
 
-If you prefer to build your HDF5 toolchain yourself,
+For AMD-GPU-enabled code, you will need the [AOMP clang](https://github.com/ROCm/aomp) compiler, and is only supported on Linux.
+The AMD GPU compilation requires the setting of the `AMD_CXX` environment variable.
+
+This helper script will download it, install it and setup the necessary environment:
+```
+scripts/install_amd_clang.sh 
+source setup_amd_compiler.sh
+```
+
+At this point, we recommend building with
+```
+export PERFORMING_CONDA_BUILD=True
+make clean && make clean_install && make all
+```
+(This will also install it in the conda location)
+
+
+If you prefer avoiding conda, assuming `h5c++` is in your path, the following should work, too:
+
+```
+make clean && make api && make main 
+#optionally
+make install
+```
+
+Note: If you prefer to build your HDF5 toolchain yourself,
 more information about how to setup the 
 stack can be found [here](https://support.hdfgroup.org/HDF5/Tutor/compile.html).
 
