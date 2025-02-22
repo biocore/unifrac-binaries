@@ -26,19 +26,20 @@
 #define SUCMP_NM  su_cpu
 #include "unifrac_cmp.hpp"
 #undef SUCMP_NM
+static constexpr int ACC_CPU=0;
 
-#ifdef UNIFRAC_ENABLE_ACC
-#define SUCMP_NM  su_acc
+#ifdef UNIFRAC_ENABLE_ACC_NV
+#define SUCMP_NM  su_acc_nv
 #include "unifrac_cmp.hpp"
 #undef SUCMP_NM
+static constexpr int ACC_NV=1;
 #endif
 
-#ifdef UNIFRAC_ENABLE_OMPGPU
-#define OMPGPU
-#define SUCMP_NM  su_ompgpu
+#ifdef UNIFRAC_ENABLE_ACC_AMD
+#define SUCMP_NM  su_acc_amd
 #include "unifrac_cmp.hpp"
 #undef SUCMP_NM
-#undef OMPGPU
+static constexpr int ACC_AMD=2;
 #endif
 
 using namespace su;
@@ -387,54 +388,11 @@ void su::faith_pd(biom_interface &table,
 }
 
 
-#ifdef UNIFRAC_ENABLE_OMPGPU
-
-// test only once, then use persistent value
-static int proc_use_ompgpu = -1;
-
-inline bool use_ompgpu() {
- if (proc_use_ompgpu!=-1) return (proc_use_ompgpu!=0);
-
- bool print_info = false;
-
- if (const char* env_p = std::getenv("UNIFRAC_GPU_INFO")) {
-   print_info = true;
-   std::string env_s(env_p);
-   if ((env_s=="NO") || (env_s=="N") || (env_s=="no") || (env_s=="n") ||
-       (env_s=="NEVER") || (env_s=="never")) {
-     print_info = false;
-   }
- }
-
- if (!su_ompgpu::found_gpu()) {
-   if (print_info) printf("INFO (unifrac): GPU not found, using CPU\n");
-   proc_use_ompgpu=0;
-   return false;
- }
-
- if (const char* env_p = std::getenv("UNIFRAC_USE_GPU")) {
-   std::string env_s(env_p);
-   if ((env_s=="NO") || (env_s=="N") || (env_s=="no") || (env_s=="n") ||
-       (env_s=="NEVER") || (env_s=="never")) {
-     if (print_info) printf("INFO (unifrac): Use of GPU explicitly disabled, using CPU\n");
-     proc_use_ompgpu=0;
-     return false;
-   }
- }
-
- if (print_info) printf("INFO (unifrac): Using GPU\n");
- proc_use_ompgpu=1;
- return true;
-}
-#endif
-
-#ifdef UNIFRAC_ENABLE_ACC
-
 // test only once, then use persistent value
 static int proc_use_acc = -1;
 
-inline bool use_acc() {
- if (proc_use_acc!=-1) return (proc_use_acc!=0);
+inline void check_acc() {
+ if (proc_use_acc!=-1) return; // keep the cached version
 
  bool print_info = false;
 
@@ -447,27 +405,77 @@ inline bool use_acc() {
    }
  }
 
- if (!su_acc::found_gpu()) {
-   if (print_info) printf("INFO (unifrac): GPU not found, using CPU\n");
-   proc_use_acc=0;
-   return false;
+ int detected_acc = ACC_CPU;
+#if defined(UNIFRAC_ENABLE_ACC_NV)
+ bool detected_nv_acc = su_acc_nv::found_gpu();
+ if (print_info) {
+   if (detected_nv_acc) {
+     printf("INFO (unifrac): NVIDIA GPU detected\n");
+   } else {
+     printf("INFO (unifrac): NVIDIA GPU not detected\n");
+   }
  }
+ if ((detected_acc==ACC_CPU) && detected_nv_acc) {
+   detected_acc = ACC_NV;
+   if (const char* env_p = std::getenv("UNIFRAC_USE_NVIDIA_GPU")) {
+     std::string env_s(env_p);
+     if ((env_s=="NO") || (env_s=="N") || (env_s=="no") || (env_s=="n") ||
+         (env_s=="NEVER") || (env_s=="never")) {
+       if (print_info) printf("INFO (unifrac): NVIDIA GPU was detected but use explicitly disabled\n");
+       detected_acc = ACC_CPU;
+     }
+   }
+ }
+#endif
+#if defined(UNIFRAC_ENABLE_ACC_AMD)
+ bool detected_amd_acc = su_acc_amd::found_gpu();
+ if (print_info) {
+   if (detected_amd_acc) {
+     printf("INFO (unifrac): AMD GPU detected\n");
+   } else {
+     printf("INFO (unifrac): AMD GPU not detected\n");
+   }
+ }
+ if ((detected_acc==ACC_CPU) && detected_amd_acc) {
+   detected_acc = ACC_AMD;
+   if (const char* env_p = std::getenv("UNIFRAC_USE_AMD_GPU")) {
+     std::string env_s(env_p);
+     if ((env_s=="NO") || (env_s=="N") || (env_s=="no") || (env_s=="n") ||
+         (env_s=="NEVER") || (env_s=="never")) {
+       if (print_info) printf("INFO (unifrac): AMD GPU was detected but use explicitly disabled\n");
+       detected_acc = ACC_CPU;
+     }
+   }
+ }
+#endif
 
  if (const char* env_p = std::getenv("UNIFRAC_USE_GPU")) {
    std::string env_s(env_p);
    if ((env_s=="NO") || (env_s=="N") || (env_s=="no") || (env_s=="n") ||
        (env_s=="NEVER") || (env_s=="never")) {
-     if (print_info) printf("INFO (unifrac): Use of GPU explicitly disabled, using CPU\n");
-     proc_use_acc=0;
-     return false;
+     if (detected_acc!=ACC_CPU) {
+        if (print_info) printf("INFO (unifrac): GPU was detected but use explicitly disabled\n");
+         detected_acc = ACC_CPU;
+     }
    }
  }
 
- if (print_info) printf("INFO (unifrac): Using GPU\n");
- proc_use_acc=1;
- return true;
-}
+ if (print_info) {
+   if (detected_acc == ACC_CPU) {
+     printf("INFO (unifrac): Using CPU (not GPU)\n");
+#if defined(UNIFRAC_ENABLE_ACC_NV)
+   } else if (detected_acc == ACC_NV) {
+     printf("INFO (unifrac): Using NVIDIA GPU\n");
 #endif
+#if defined(UNIFRAC_ENABLE_ACC_AMD)
+   } else if (detected_acc == ACC_AMD) {
+     printf("INFO (unifrac): Using AMD GPU\n");
+#endif
+   }
+ }
+ // we can assume int is atomic
+ proc_use_acc = detected_acc;
+}
 
 void su::unifrac(biom_interface &table,
                  BPTree &tree,
@@ -475,19 +483,17 @@ void su::unifrac(biom_interface &table,
                  std::vector<double*> &dm_stripes,
                  std::vector<double*> &dm_stripes_total,
                  const su::task_parameters* task_p) {
-#if defined(UNIFRAC_ENABLE_OMPGPU)
-  if (use_ompgpu()) {
-    su_ompgpu::unifrac(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
-  } else {
-#elif defined(UNIFRAC_ENABLE_ACC)
-  // TODO: Should we support both OMPGPU and ACC at the same time?
-  if (use_acc()) {
-    su_acc::unifrac(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
-  } else {
-#else
-  if (true) {
-#endif
+  check_acc();
+  if (proc_use_acc==ACC_CPU) {
     su_cpu::unifrac(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
+#if defined(UNIFRAC_ENABLE_ACC_NV)
+  } else if (proc_use_acc==ACC_NV) {
+    su_acc_nv::unifrac(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
+#endif
+#if defined(UNIFRAC_ENABLE_ACC_AMD)
+  } else if (proc_use_acc==ACC_AMD) {
+    su_acc_amd::unifrac(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
+#endif
   }
 }
 
@@ -498,19 +504,17 @@ void su::unifrac_vaw(biom_interface &table,
                      std::vector<double*> &dm_stripes,
                      std::vector<double*> &dm_stripes_total,
                      const su::task_parameters* task_p) {
-#if defined(UNIFRAC_ENABLE_OMPGPU)
-  if (use_ompgpu()) {
-   su_ompgpu::unifrac_vaw(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
-  } else {
-#elif defined(UNIFRAC_ENABLE_ACC)
-  // TODO: Should we support both OMPGPU and ACC at the same time?
-  if (use_acc()) {
-   su_acc::unifrac_vaw(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
-  } else {
-#else
-  if (true) {
-#endif
+  check_acc();
+  if (proc_use_acc==ACC_CPU) {
    su_cpu::unifrac_vaw(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
+#if defined(UNIFRAC_ENABLE_ACC_NV)
+  } else if (proc_use_acc==ACC_NV) {
+   su_acc_nv::unifrac_vaw(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
+#endif
+#if defined(UNIFRAC_ENABLE_ACC_AMD)
+  } else if (proc_use_acc==ACC_AMD) {
+   su_acc_amd::unifrac_vaw(table, tree, unifrac_method, dm_stripes, dm_stripes_total, task_p);
+#endif
   }
 }
 

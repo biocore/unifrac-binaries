@@ -36,9 +36,9 @@ export PATH=$PWD/conda_nv_bins:$PATH
 # Install the NVIDIA HPC SDK
 
 # This link may need to be updated, as new compiler versions are released
-# Note: Verified that it works with v23.5
+# Note: Verified that it works with v25.1
 if [ "x${NV_URL}" == "x" ]; then
-  NV_URL=https://developer.download.nvidia.com/hpc-sdk/23.5/nvhpc_2023_235_Linux_x86_64_cuda_multi.tar.gz
+  NV_URL=https://developer.download.nvidia.com/hpc-sdk/25.1/nvhpc_2025_251_Linux_x86_64_cuda_multi.tar.gz
 fi
 
 echo "Downloading the NVIDIA HPC SDK"
@@ -83,17 +83,6 @@ mkdir setup_scripts
 cat > setup_scripts/setup_nv_hpc_bins.sh << EOF
 PATH=$PWD/conda_nv_bins:`ls -d $PWD/hpc_sdk/*/202*/compilers/bin`:\$PATH
 
-export NV_CXX=pgc++
-
-# pgc++ does not define it, but gcc libraries expect it
-# also remove the existing conda flags, which are not compatible
-export NV_CPPFLAGS=-D__GCC_ATOMIC_TEST_AND_SET_TRUEVAL=0
-export NV_CXXFLAGS=\${NV_CPPFLAGS}
-export NV_CFLAGS=\${NV_CPPFLAGS}
-
-# reuse the same top-level LDFLAGS
-export NV_LDFLAGS=\${LDFLAGS}
-
 EOF
 
 # patch localrc to find crt1.o
@@ -104,13 +93,23 @@ for f in ${NVHPC_INSTALL_DIR}/*/202*/compilers/bin/localrc; do
   #echo "===="
 done
 
-# TODO: Get rid of this indirection
-cat > setup_nv_h5.sh  << EOF
+cat > setup_nv_compiler.sh  << EOF
 . $PWD/setup_scripts/setup_nv_hpc_bins.sh
+
+export NV_CXX=pgc++
+
+# no special  flags needed in most cases
+export NV_CPPFLAGS=
+export NV_CXXFLAGS=
+export NV_CFLAGS=
+
+# reuse the same top-level LDFLAGS
+# in order to find the right system shared libraries, etc.
+export NV_LDFLAGS=\${LDFLAGS}
 
 EOF
 
 # we don't need the install dir anymore
 rm -fr nvhpc_*
 
-echo "Setup script avaiabile in $PWD/setup_nv_h5.sh"
+echo "Setup script avaiabile in $PWD/setup_nv_compiler.sh"
