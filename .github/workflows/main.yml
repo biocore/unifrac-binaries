@@ -63,24 +63,24 @@ jobs:
         fi
         which h5c++
         export PERFORMING_CONDA_BUILD=True
-        export BUILD_OFFLOAD=${{ matrix.offload }}
-        if [[ "$(uname -s)" == "Linux" ]] && [[ "x${BUILD_OFFLOAD}" != "xcpu" ]];
+        export BUILD_NV_OFFLOAD=${{ matrix.offload }}
+        if [[ "$(uname -s)" == "Linux" ]] && [[ "x${BUILD_NV_OFFLOAD}" != "xcpu" ]];
         then
-          # install PGI but do not source it
-          # the makefile will do it automatically
+          # install PGI locally
           ./scripts/install_hpc_sdk.sh </dev/null
+          # also install the AMD compiler
+          ./scripts/install_amd_clang.sh </dev/null
+          # get the compilers in the path and set NV_CXX and AMD_CXX
+          . ./setup_nv_compiler.sh
+          . ./setup_amd_compiler.sh
         fi
+        # else, no NV_CXX or AMD_CXX in the env, so no GPU build
         df -h .
-        if [[ "x${BUILD_OFFLOAD}" == "xcpu" ]];
-        then
-           # CPU-only builds use no GPU
-           export NOGPU=1
-        fi
         echo "======= begin env ====="
         env
         echo "=======  end env  ====="
         # all == build (shlib,bins,tests) and install
-        make all
+        make clean && make clean_install && make all
         df -h .
     - name: Tests
       shell: bash -l {0}
@@ -100,6 +100,7 @@ jobs:
         ./test_su
         ./test_api
         ./test_ska
+        ./test_su_api
         popd
         pushd test
         ./capi_test 1
