@@ -521,6 +521,12 @@ namespace SUCMP_NM {
           acc_create_buf(zcheck, 0, n_samples);
           acc_create_buf(stripe_sums, 0 , n_samples);
           acc_create_buf(sums, 0 , bsize);
+#if SUCMP_ID(SUCMP_NM)==su_cpu_SUCMP_ID
+	  idxs = NULL; // not used in the CPU code
+#else
+          idxs = (uint32_t*) malloc(sizeof(uint32_t) * n_samples);
+          acc_create_buf(idxs, 0, n_samples);
+#endif
         }
 
         virtual ~UnifracCommonUnweightedTask()
@@ -528,6 +534,12 @@ namespace SUCMP_NM {
           const unsigned int n_samples = this->task_p->n_samples;
           const unsigned int bsize = this->max_embs*(0x400/32);
 
+#if SUCMP_ID(SUCMP_NM)==su_cpu_SUCMP_ID
+	  // not allocated in the CPU code
+#else
+          acc_destroy_buf(idxs, 0, n_samples);
+          free(idxs);
+#endif
           acc_destroy_buf(sums, 0 , bsize);
           acc_destroy_buf(stripe_sums, 0 , n_samples);
           acc_destroy_buf(zcheck, 0, n_samples);
@@ -541,6 +553,7 @@ namespace SUCMP_NM {
         // temp buffers
         TFloat *sums;
         bool     *zcheck;
+        uint32_t *idxs;  // assuming n_samples si really a uint32_t number
         TFloat   *stripe_sums;
     };
     template<class TFloat>
@@ -561,7 +574,7 @@ namespace SUCMP_NM {
 			 this->get_emb_els(this->max_embs), filled_embs,
 			 this->task_p->start, this->task_p->stop, this->task_p->n_samples, this->dm_stripes.n_samples_r,
 			 this->lengths, this->get_embedded_proportions(), this->dm_stripes.buf, this->dm_stripes_total.buf,
-			 this->sums, this->zcheck, this->stripe_sums);
+			 this->sums, this->zcheck, this->idxs, this->stripe_sums);
 
           // next iteration will use the alternative space
           this->set_alt_embedded_proportions();
@@ -586,7 +599,7 @@ namespace SUCMP_NM {
 			  this->task_p->start, this->task_p->stop, this->task_p->n_samples, this->dm_stripes.n_samples_r,
 			  this->lengths, this->get_embedded_proportions(),
 			  this->dm_stripes.buf,
-			  this->sums, this->zcheck, this->stripe_sums);
+			  this->sums, this->zcheck, this->idxs, this->stripe_sums);
 
           // next iteration will use the alternative space
           this->set_alt_embedded_proportions();

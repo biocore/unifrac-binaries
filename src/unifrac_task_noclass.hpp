@@ -1,12 +1,20 @@
 /*
  * BSD 3-Clause License
  *
- * Copyright (c) 2025-2025, UniFrac development team.
+ * Copyright (c) 2016-2025, UniFrac development team.
  * All rights reserved.
  *
  * See LICENSE file for more details
  */
 
+/*
+ *
+ * This file is used to create the necessary interfaces between
+ *   unifrac_task.hpp and unifrac_task_impl.hpp
+ * by means of
+ *   generate_unifrac_task_noclass.py
+ *
+ */
 
 #ifndef __UNIFRAC_TASK_NOCLASS
 #define __UNIFRAC_TASK_NOCLASS 1
@@ -114,6 +122,7 @@ namespace SUCMP_NM {
 		TFloat * const __restrict__ dm_stripes_total_buf,
 		TFloat * const __restrict__ sums,
 		bool   * const __restrict__ zcheck,
+		uint32_t* const __restrict__ idxs,
 		TFloat * const __restrict__ stripe_sums);
 
     // Compute UnnormalizedUnweighted step
@@ -128,6 +137,7 @@ namespace SUCMP_NM {
 		TFloat * const __restrict__ dm_stripes_buf,
 		TFloat * const __restrict__ sums,
 		bool   * const __restrict__ zcheck,
+		uint32_t* const __restrict__ idxs,
 		TFloat * const __restrict__ stripe_sums);
 
     // Compute Generalized step

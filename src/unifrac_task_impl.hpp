@@ -1,3 +1,12 @@
+/*
+ * BSD 3-Clause License
+ *
+ * Copyright (c) 2016-2025, UniFrac development team.
+ * All rights reserved.
+ *
+ * See LICENSE file for more details
+ */
+
 #include <math.h> 
 #include <algorithm> 
 #include "unifrac_task_noclass.hpp"
@@ -1194,7 +1203,7 @@ static inline void run_VawGeneralizedTask_T(
 // Single step in computing Unweighted Unifrac
 
 template<class TFloat>
-static inline void UnweightedOneSide(
+static inline bool UnweightedOneSide(
                       bool   * const __restrict__ zcheck,
                       TFloat * const  __restrict__ stripe_sums,
                       const TFloat * const   __restrict__ sums,
@@ -1256,8 +1265,8 @@ static inline void UnweightedOneSide(
                 }
             }
 
-            zcheck[kl] = all_zeros;
             stripe_sums[kl] = my_stripe;
+	    return all_zeros;
 
 }
 
@@ -1436,29 +1445,57 @@ static inline void Unweighted1(
 
 // check for zero values
 template<class TFloat, class T>
-static inline void UnweightedZerosAndSums(
+static inline uint32_t UnweightedZerosAndSums(
                       bool   * const __restrict__ zcheck,
+		      uint32_t* const __restrict__ idxs,
                       TFloat * const  __restrict__ stripe_sums,
                       const TFloat * const   __restrict__ el_sums,
                       const T * const __restrict__ embedded_proportions,
                       const uint64_t embs_stripe,
                       const unsigned int filled_embs_els_round,
-                      const uint64_t n_samples,
+                      const uint32_t n_samples,
                       const uint64_t n_samples_r) {
+    uint32_t n_true_idxs = 0;
 #if defined(OMPGPU)
-#pragma omp target teams distribute parallel for simd default(shared)
+#pragma omp target teams distribute parallel for simd reduction(+:n_true_idxs) default(shared)
 #elif defined(_OPENACC)
-#pragma acc parallel loop gang vector present(embedded_proportions,zcheck,el_sums,stripe_sums)
+#pragma acc parallel loop gang vector reduction(+:n_true_idxs) present(embedded_proportions,zcheck,el_sums,stripe_sums)
 #else
-#pragma omp parallel for default(shared)
+#pragma omp parallel for reduction(+:n_true_idxs) default(shared)
 #endif
-    for(uint64_t k=0; k<n_samples; k++) {
-            UnweightedOneSide(
+    for(uint32_t k=0; k<n_samples; k++) {
+            bool all_zeros = UnweightedOneSide(
                       zcheck, stripe_sums,
                       el_sums, embedded_proportions,
                       embs_stripe, filled_embs_els_round, n_samples_r,
                       k);
+            zcheck[k] = all_zeros;
+	    if (all_zeros) n_true_idxs++;
     }
+
+#if defined(OMPGPU) || defined(_OPENACC)
+    // create index of k, first all of those with zcheck true, then all false
+    // equivalent to stable_sort, but knowing in advance n_true_idxs
+#if defined(OMPGPU)
+#pragma omp target teams distribute parallel for simd default(shared)
+#elif defined(_OPENACC)
+#pragma acc parallel loop gang vector present(idxs,zcheck)
+#endif
+    for (int b=0; b<2; b++) {
+      const bool mytest = (b==0);
+      uint32_t icurr =  mytest ? 0 : n_true_idxs; 
+      for(uint32_t k=0; k<uint32_t(n_samples); k++) {
+        if (zcheck[k]==mytest) {
+          idxs[icurr] = k;
+          icurr++;;
+        }
+      }
+    }
+#else
+    // CPU version does not use idxs
+#endif
+
+    return n_true_idxs;
 }
 
 template<class TFloat>
@@ -1473,6 +1510,7 @@ static inline void run_UnweightedTask_T(
 		TFloat * const __restrict__ dm_stripes_total_buf,
 		TFloat * const __restrict__ sums,
 		bool   * const __restrict__ zcheck,
+		uint32_t* const __restrict__ idxs,
 		TFloat * const __restrict__ stripe_sums) {
     static constexpr bool compute_total = true;
 
@@ -1556,26 +1594,32 @@ static inline void run_UnweightedTask_T(
 #pragma acc wait
 #endif
     // check for zero values and compute stripe sums
-    UnweightedZerosAndSums(zcheck, stripe_sums,
+    uint32_t n_true_idxs = 
+	    UnweightedZerosAndSums(zcheck, idxs, stripe_sums,
                            sums, embedded_proportions,
                            embs_stripe, filled_embs_els_round, n_samples, n_samples_r);
 
+
     // point of thread
 #if defined(_OPENACC) || defined(OMPGPU)
+
+    // With idxs ordered, keep elements with same zcheck_k together
+    // This minimizes warp divergence, which is important given drastically different cost of some paths
+    // It does potentially disrupt memory coalescence, but the major memory cost is access to su, which is pseudo-random anyway
+    // (Note that sorting is not affective for the Weighted methods, since they have a much more regular memory access pattern)
 #if defined(OMPGPU)
     // TODO: Explore async omp target
 #pragma omp target teams distribute parallel for simd collapse(3) default(shared)
 #else
-#pragma acc parallel loop collapse(3) gang vector present(embedded_proportions,dm_stripes_buf,dm_stripes_total_buf,sums,zcheck,stripe_sums) async
+#pragma acc parallel loop collapse(3) gang vector present(embedded_proportions,dm_stripes_buf,dm_stripes_total_buf,sums,zcheck,idxs,stripe_sums) async
 #endif
     for(uint64_t sk = 0; sk < sample_steps ; sk++) {
       for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
         for(uint64_t ik = 0; ik < step_size ; ik++) {
-            const uint64_t k = sk*step_size + ik;
+          const uint64_t k_idx = sk*step_size + ik;
+          if (k_idx<n_samples) { // else past the limit
+	    const uint64_t k = idxs[k_idx];
             const uint64_t idx = (stripe-start_idx) * n_samples_r;
-
-            if (k>=n_samples) continue; // past the limit
-
             const uint64_t l1 = (k + stripe + 1)%n_samples; // wraparound
 
             Unweighted1<TFloat,compute_total>(
@@ -1584,10 +1628,10 @@ static inline void run_UnweightedTask_T(
                                 sums, embedded_proportions,
                                 filled_embs_els_round,idx, n_samples_r,
                                 k, l1);
-        }
-
-      }
-    }
+	  } // if k_idx
+        } // for ik
+      } // for stripe
+    } // for sk
 #else
     // tilling helps with better cache reuse without the need of multiple cores
     const uint64_t stripe_steps = ((stop_idx-start_idx)+(step_size-1))/step_size; // round up
@@ -1633,6 +1677,7 @@ static inline void run_UnnormalizedUnweightedTask_T(
 		TFloat * const __restrict__ dm_stripes_buf,
 		TFloat * const __restrict__ sums,
 		bool   * const __restrict__ zcheck,
+		uint32_t* const __restrict__ idxs,
 		TFloat * const __restrict__ stripe_sums) {
     static constexpr bool compute_total = false;
 
@@ -1716,26 +1761,30 @@ static inline void run_UnnormalizedUnweightedTask_T(
 #pragma acc wait
 #endif
     // check for zero values and compute stripe sums
-    UnweightedZerosAndSums(zcheck, stripe_sums,
+    uint32_t n_true_idxs = 
+            UnweightedZerosAndSums(zcheck, idxs, stripe_sums,
                            sums, embedded_proportions,
                            embs_stripe, filled_embs_els_round, n_samples, n_samples_r);
 
     // point of thread
 #if defined(_OPENACC) || defined(OMPGPU)
+    // With idxs ordered, keep elements with same zcheck_k together
+    // This minimizes warp divergence, which is important given drastically different cost of some paths
+    // It does potentially disrupt memory coalescence, but the major memory cost is access to su, which is pseudo-random anyway
+    // (Note that sorting is not affective for the Weighted methods, since they have a much more regular memory access pattern)
 #if defined(OMPGPU)
     // TODO: Explore async omp target
 #pragma omp target teams distribute parallel for simd collapse(3) default(shared)
 #else
-#pragma acc parallel loop collapse(3) gang vector present(embedded_proportions,dm_stripes_buf,sums,zcheck,stripe_sums) async
+#pragma acc parallel loop collapse(3) gang vector present(embedded_proportions,dm_stripes_buf,sums,zcheck,idxs,stripe_sums) async
 #endif
     for(uint64_t sk = 0; sk < sample_steps ; sk++) {
       for(uint64_t stripe = start_idx; stripe < stop_idx; stripe++) {
         for(uint64_t ik = 0; ik < step_size ; ik++) {
-            const uint64_t k = sk*step_size + ik;
+          const uint64_t k_idx = sk*step_size + ik;
+          if (k_idx<n_samples) { // else past the limit
+	    const uint64_t k = idxs[k_idx];
             const uint64_t idx = (stripe-start_idx) * n_samples_r;
-
-            if (k>=n_samples) continue; // past the limit
-
             const uint64_t l1 = (k + stripe + 1)%n_samples; // wraparound
 
             Unweighted1<TFloat,compute_total>(
@@ -1744,10 +1793,10 @@ static inline void run_UnnormalizedUnweightedTask_T(
                                 sums, embedded_proportions,
                                 filled_embs_els_round,idx, n_samples_r,
                                 k, l1);
-        }
-
-      }
-    }
+	  } // if k_idx
+        } // for ik
+      } // for stripe
+    } // for sk
 #else
     // tilling helps with better cache reuse without the need of multiple cores
     const uint64_t stripe_steps = ((stop_idx-start_idx)+(step_size-1))/step_size; // round up
