@@ -59,9 +59,15 @@ To install, first the binary needs to be compiled. This assumes that the HDF5 to
 **Note**: if you are using [conda](https://docs.anaconda.com/miniconda/) we recommend installing HDF5 and related compiler using the
 `conda-forge` channel, for example:
 
-On Linux:
+On Linux x86:
 ```
 conda create --strict-channel-priority -n unifrac-binaries -c conda-forge gxx_linux-64 hdf5 lz4 zlib hdf5-static scikit-bio-binaries make curl
+conda activate unifrac-binaries
+```
+
+On Linux ARM:
+```
+conda create --strict-channel-priority -n unifrac-binaries -c conda-forge gxx_linux-aarch64 hdf5 lz4 zlib hdf5-static scikit-bio-binaries make curl
 conda activate unifrac-binaries
 ```
 

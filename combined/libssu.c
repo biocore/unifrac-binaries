@@ -24,11 +24,16 @@
 /* Must be before the include of ssu_ld */
 #ifndef BASIC_ONLY
 static const char *ssu_get_lib_name() {
+#if defined(__x86_64__)
    __builtin_cpu_init ();
    bool has_v2  = __builtin_cpu_supports ("x86-64-v2");
    bool has_v3  = __builtin_cpu_supports ("x86-64-v3");
    bool has_v4  = __builtin_cpu_supports ("x86-64-v4");
-
+#else
+   bool has_v2  = false;
+   bool has_v3  = false;
+   bool has_v4  = false;
+#endif
    const char* env_max_cpu = getenv("UNIFRAC_MAX_CPU");
 
    if (env_max_cpu!=NULL) {

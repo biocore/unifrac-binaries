@@ -8,7 +8,7 @@
 #
 
 if [ "x${SYSROOT_DIR}" == "x" ]; then
-  SYSROOT_DIR=${CONDA_PREFIX}/x86_64-conda-linux-gnu/sysroot/usr/lib64
+  SYSROOT_DIR=${CONDA_PREFIX}/`$CC -dumpmachine`/sysroot/usr/lib64
 fi
 
 # Create GCC symbolic links
@@ -38,7 +38,15 @@ export PATH=$PWD/conda_nv_bins:$PATH
 # This link may need to be updated, as new compiler versions are released
 # Note: Verified that it works with v25.11
 if [ "x${NV_URL}" == "x" ]; then
-  NV_URL=https://developer.download.nvidia.com/hpc-sdk/25.11/nvhpc_2025_2511_Linux_x86_64_cuda_multi.tar.gz
+  if [ "x${NV_ARCH}" == "x" ]; then
+    if [ "x`$CC -dumpmachine |grep x86_64`" != "x" ]; then
+      NV_ARCH=x86_64
+    else
+      # else, we guess it is arm
+      NV_ARCH=aarch64
+    fi
+  fi
+  NV_URL=https://developer.download.nvidia.com/hpc-sdk/25.11/nvhpc_2025_2511_Linux_${NV_ARCH}_cuda_multi.tar.gz
 fi
 
 echo "Downloading the NVIDIA HPC SDK"

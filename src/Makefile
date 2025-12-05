@@ -37,13 +37,12 @@ endif
 SKBBLIB=-lskbb
 
 ifeq ($(PLATFORM),Darwin)
-	AVX2 := $(shell sysctl -a | grep -c AVX2)
 	LDDFLAGS = -dynamiclib -install_name @rpath/lib$(SSU).so
 	CPPFLAGS+= -D_LIBCPP_DISABLE_AVAILABILITY
 	NOGPU := 1
 else
-	AVX2 := $(shell grep "^flags" /proc/cpuinfo | head -n 1 | grep -c avx2)
 	LDDFLAGS = -shared
+	ARCH := $(shell h5c++ -dumpmachine)
 endif
 
 EXEFLAGS =
@@ -79,7 +78,7 @@ ifndef NOGPU
    ifeq ($(BUILD_NV_OFFLOAD),ompgpu)
 	ifneq (,$(findstring pgi,$(NV_COMPILER)))
 		UNIFRAC_ACC_SHLIBS += libssu_acc_nv.so
-		NV_CPPFLAGS += -tp=px -mp=gpu -DOMPGPU=1 -noacc
+		NV_CPPFLAGS += -mp=gpu -DOMPGPU=1 -noacc
 	        ifneq ($(PERFORMING_CONDA_BUILD),False)
 	            NV_CPPFLAGS += -gpu=ccall
 		else
@@ -92,7 +91,7 @@ ifndef NOGPU
    else 
 	ifneq (,$(findstring pgi,$(NV_COMPILER)))
 		UNIFRAC_ACC_SHLIBS += libssu_acc_nv.so
-		NV_CPPFLAGS += -tp=px -acc
+		NV_CPPFLAGS += -acc
 	        ifneq ($(PERFORMING_CONDA_BUILD),False)
 	            NV_CPPFLAGS += -gpu=ccall
 		else
@@ -102,6 +101,11 @@ ifndef NOGPU
                 endif
 		NV_LDFLAGS += -shared -acc -Bstatic_pgi
 	endif
+   endif
+   ifneq (,$(findstring x86_64,$(ARCH)))
+     NV_CPPFLAGS += -tp=px
+   else
+     NV_CPPFLAGS += -tp=neoverse-n1
    endif
    NV_CPPFLAGS += -Mfpapprox -Mfprelaxed -Mflushz
    # AMD GPUs
@@ -127,9 +131,12 @@ ifeq ($(BUILD_FULL_OPTIMIZATION),False)
          	# no special tuning for the MacOS at this point
 	  	CPPFLAGS += 
 	else
-		# assuming x86 for now... may want to check for architecture
-		# x86-64 the most generic option avaialable in modern gcc
-		CPPFLAGS += -march=x86-64 -mtune=generic
+		ifneq (,$(findstring x86_64,$(ARCH)))
+			CPPFLAGS += -march=x86-64 -mtune=generic
+		else
+			# target server-class ARM processors
+			CPPFLAGS += -march=armv8.2-a -mtune=neoverse-n1
+		endif
 	endif
     endif
 else

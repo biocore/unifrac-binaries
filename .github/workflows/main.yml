@@ -13,7 +13,7 @@ jobs:
   build-and-test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-15, macos-15-intel, linux-gpu-cuda]
+        os: [ubuntu-latest, macos-15, macos-15-intel, linux-gpu-cuda, ubuntu-24.04-arm]
         offload: [cpu, acc, ompgpu]
         exclude:
           - os: linux-gpu-cuda
@@ -37,30 +37,21 @@ jobs:
       shell: bash -l {0}
       run: |
         df -h .
+        cplatform=`conda info |awk '/platform/{print $3}'`
+        echo "Conda platform: ${cplatform}"
         if [[ "$(uname -s)" == "Linux" ]];
         then
-          conda create -q --yes --strict-channel-priority -n unifrac -c conda-forge gxx_linux-64 hdf5 lz4 zlib hdf5-static scikit-bio-binaries make curl
+          conda create -q --yes --strict-channel-priority -n unifrac -c conda-forge gxx_${cplatform} hdf5 lz4 zlib hdf5-static scikit-bio-binaries make curl
         else
-         if [[ "x`conda info |awk '/platform/{print $3}'`" == "xosx-64" ]];
-         then
-          conda create -q --yes --strict-channel-priority -n unifrac -c conda-forge clangxx_osx-64 hdf5 lz4 hdf5-static scikit-bio-binaries make curl
-         else
-          conda create -q --yes --strict-channel-priority -n unifrac -c conda-forge clangxx_osx-arm64 hdf5 lz4 hdf5-static scikit-bio-binaries make curl
-         fi
+          conda create -q --yes --strict-channel-priority -n unifrac -c conda-forge clangxx_${cplatform} hdf5 lz4 hdf5-static scikit-bio-binaries make curl
         fi 
         conda clean --yes -t
         df -h .
         conda activate unifrac
         echo "$(uname -s)"
-        if [[ "$(uname -s)" == "Linux" ]];
-        then
-          which x86_64-conda-linux-gnu-gcc
-          x86_64-conda-linux-gnu-gcc -v
-          x86_64-conda-linux-gnu-g++ -v
-        else
-          which clang
-          clang -v
-        fi
+        which $CC
+        $CC -v
+        $CXX -v
         which h5c++
         export PERFORMING_CONDA_BUILD=True
         export BUILD_NV_OFFLOAD=${{ matrix.offload }}
@@ -68,11 +59,15 @@ jobs:
         then
           # install PGI locally
           ./scripts/install_hpc_sdk.sh </dev/null
-          # also install the AMD compiler
-          ./scripts/install_amd_clang.sh </dev/null
+          if [[ "x${cplatform}" == "xlinux-64" ]]; then
+            # also install the AMD compiler
+            ./scripts/install_amd_clang.sh </dev/null
+          fi
           # get the compilers in the path and set NV_CXX and AMD_CXX
           . ./setup_nv_compiler.sh
-          . ./setup_amd_compiler.sh
+          if [[ "x${cplatform}" == "xlinux-64" ]]; then
+            . ./setup_amd_compiler.sh
+          fi
         fi
         # else, no NV_CXX or AMD_CXX in the env, so no GPU build
         df -h .

@@ -1,9 +1,6 @@
 .PHONY: test clean all clean_install
 
-# Note: This Makefile will NOT properly work with the -j option 
-
 PLATFORM := $(shell uname -s)
-COMPILER := $(shell ($(CXX) -v 2>&1) | tr A-Z a-z )
 
 ifeq ($(PLATFORM),Darwin)
 # only one optimization level and no GPU support for MacOS
@@ -22,6 +19,9 @@ clean_install:
 	-cd src && $(MAKE) clean_install
 
 else
+ARCH := $(shell h5c++ -dumpmachine)
+
+ifneq (,$(findstring x86_64,$(ARCH)))
 # Linux with several optimization levels and with optional GPU support
 
 all: 
@@ -74,7 +74,7 @@ all_cpu_x86_v4:
 	$(MAKE) api_cpu_x86_v4
 	$(MAKE) install_cpu_x86_v4
 
-all_acc: 
+all_acc:
 	$(MAKE) api_acc
 	$(MAKE) install_lib_acc
 
@@ -83,6 +83,50 @@ all_combined:
 	$(MAKE) install_combined
 	$(MAKE) main
 	$(MAKE) install_main
+
+else
+# only one optimization level for non-x86 architectures
+
+all: 
+	$(MAKE) all_cpu
+	$(MAKE) all_acc
+	$(MAKE) test_binaries
+
+clean:
+	$(MAKE) clean_cpu
+
+clean_install:
+	$(MAKE) clean_install_cpu
+
+all_cpu: 
+	$(MAKE) all_cpu_basic
+	$(MAKE) all_combined
+
+clean_cpu:
+	-cd test && $(MAKE) clean
+	-export BUILD_VARIANT=cpu_basic; cd src && $(MAKE) clean
+	-cd combined && $(MAKE) clean
+
+clean_install_cpu:
+	-export BUILD_VARIANT=cpu_basic; cd src && $(MAKE) clean_install
+	-cd combined && $(MAKE) clean_install
+
+all_cpu_basic:
+	$(MAKE) api_cpu_basic
+	$(MAKE) install_cpu_basic
+
+
+all_acc:
+	$(MAKE) api_acc
+	$(MAKE) install_lib_acc
+
+all_combined:
+	$(MAKE) api_combined
+	$(MAKE) install_combined
+	$(MAKE) main
+	$(MAKE) install_main
+
+endif
 
 endif
 
@@ -104,7 +148,7 @@ api_cpu_x86_v4:
 	export BUILD_VARIANT=cpu_x86_v4 ; export BUILD_FULL_OPTIMIZATION=x86-64-v4 ; export BUILD_TUNE_OPTIMIZATION=znver4 ;cd src && $(MAKE) clean && $(MAKE) api
 
 api_acc:
-	export BUILD_FULL_OPTIMIZATION=False ; cd src && $(MAKE) clean && $(MAKE) api_acc
+	cd src && $(MAKE) clean && $(MAKE) api_acc
 
 api_combined:
 	cd combined && $(MAKE) clean && $(MAKE) api
@@ -135,7 +179,7 @@ install_cpu_x86_v4:
 	export BUILD_VARIANT=cpu_x86_v4 ; export BUILD_FULL_OPTIMIZATION=x86-64-v4 ; cd src && $(MAKE) install_lib
 
 install_lib_acc:
-	export BUILD_FULL_OPTIMIZATION=False ; cd src && $(MAKE) install_lib_acc
+	cd src && $(MAKE) install_lib_acc
 
 install_combined:
 	cd combined && $(MAKE) install
