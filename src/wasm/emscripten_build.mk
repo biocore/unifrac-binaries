@@ -172,6 +172,24 @@ test_unifrac_e2e_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_unifrac
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
+# Stage 8: compile the public-C-API test (test/capi_inmem_test.c, the
+# native CI's capi_inmem_test target) under emcc + node. The file uses
+# C semantics for `bool` (via <stdbool.h>) — must be compiled with emcc
+# (C front-end), not em++, to avoid the `#define bool char` fallback in
+# the source from clobbering the api.hpp `bool*` ABI when bool is a C++
+# keyword. emcc handles linking C objects with C++ archives transparently.
+WASM_CC          := emcc
+WASM_API_TEST_SRC := ../test/capi_inmem_test.c
+WASM_CFLAGS      := -O3 -Wall -I. -I.wasm-skbb-include \
+                    -DUNIFRAC_WASM=1 -DSKIP_MMAP=1 -DNOGPU=1 \
+                    -Wno-unknown-pragmas
+
+test_capi_inmem_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) $(WASM_API_TEST_SRC) \
+                       $(WASM_SKBB_STAGED_HS)
+	$(WASM_CC) $(WASM_CFLAGS) $(WASM_API_TEST_SRC) \
+	    libssu_wasm.a $(WASM_SKBB_LIB) \
+	    $(WASM_TEST_LDFLAGS) -o $@
+
 wasm_regen_permanova_expected: tests/wasm/generate_permanova_expected.cpp
 	$(CXX) $(WASM_REGEN_CXXFLAGS) tests/wasm/generate_permanova_expected.cpp \
 	    $(WASM_REGEN_LDLIBS) -o generate_permanova_expected.exe
@@ -218,7 +236,8 @@ wasm_regen_pcoa_expected: tests/wasm/generate_pcoa_expected.cpp
 	@echo "Regenerated tests/wasm/expected/pcoa_expected.h"
 
 wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js test_subsample_wasm.js \
-           test_pcoa_wasm.js test_permanova_wasm.js test_unifrac_e2e_wasm.js
+           test_pcoa_wasm.js test_permanova_wasm.js test_unifrac_e2e_wasm.js \
+           test_capi_inmem_wasm.js
 	@echo "--- smoke ---"
 	node test_smoke_wasm.js
 	@echo "--- faith_pd ---"
@@ -231,6 +250,8 @@ wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js test_subsample_wasm.js \
 	node test_permanova_wasm.js
 	@echo "--- unifrac_e2e ---"
 	node test_unifrac_e2e_wasm.js
+	@echo "--- capi_inmem (public C API symmetry) ---"
+	node test_capi_inmem_wasm.js 1
 
 # --------------------------------------------------------------------------
 # Cleanup
