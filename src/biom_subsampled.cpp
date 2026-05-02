@@ -13,7 +13,7 @@
 #include <random>
 #include <vector>
 #include <algorithm>
-#include <omp.h>
+#include "omp_stub.h"
 
 #include "biom_subsampled.hpp"
 

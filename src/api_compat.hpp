@@ -15,6 +15,7 @@
  *
  */
 
+#ifndef UNIFRAC_WASM
 ComputeStatus partial(const char* biom_filename, const char* tree_filename,
                        const char* unifrac_method, bool variance_adjust, double alpha, bool bypass_tips,
                        unsigned int n_substeps, unsigned int stripe_start, unsigned int stripe_stop,
@@ -92,6 +93,7 @@ ComputeStatus one_off_matrix_fp32(const char* biom_filename, const char* tree_fi
                                    mat_full_fp32_t** result) {
     return one_off_matrix_fp32_v2(biom_filename,tree_filename,unifrac_method,variance_adjust,alpha,bypass_tips,nthreads,0,true,mmap_dir,result);
 }
+#endif // UNIFRAC_WASM (file-based v2 compat wrappers)
 
 ComputeStatus one_off_matrix_inmem_v2(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                        const char* unifrac_method, bool variance_adjust, double alpha,
@@ -144,6 +146,7 @@ ComputeStatus one_dense_pair_v2(unsigned int n_obs, const char ** obs_ids, const
     return one_dense_pair_v3(n_obs,obs_ids,sample1,sample2,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,result);
 }
 
+#ifndef UNIFRAC_WASM
 ComputeStatus unifrac_to_file_v2(const char* biom_filename, const char* tree_filename, const char* out_filename,
                                   const char* unifrac_method, bool variance_adjust, double alpha,
                                   bool bypass_tips, unsigned int n_substeps, const char* format,
@@ -186,4 +189,5 @@ IOStatus write_mat_from_matrix_hdf5_fp32(const char* output_filename, mat_full_f
   return write_mat_from_matrix_hdf5_fp32_v2(output_filename,result,pcoa_dims,save_dist,
                              0,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
 }
+#endif // UNIFRAC_WASM (unifrac_to_file_v2 + write_mat_from_matrix_hdf5 compat)
 

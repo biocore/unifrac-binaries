@@ -1,5 +1,7 @@
 #include "api.hpp"
+#ifndef UNIFRAC_WASM
 #include "biom.hpp"
+#endif
 #include "tree.hpp"
 #include "tsv.hpp"
 #include "unifrac.hpp"
@@ -15,10 +17,12 @@
 #include <stdexcept>
 #include <charconv>
 
+#ifndef UNIFRAC_WASM
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <lz4.h>
+#endif
 #include <time.h>
 #if defined(_OPENMP)
 #include <omp.h>
@@ -113,6 +117,7 @@ void ssu_set_random_seed(unsigned int new_seed) {
   su::set_random_seed(new_seed);
 }
 
+#ifndef UNIFRAC_WASM
 // https://stackoverflow.com/a/19841704/19741
 bool is_file_exists(const char *fileName) {
     std::ifstream infile(fileName);
@@ -135,6 +140,7 @@ IOStatus read_bptree_opaque(const char* tree_filename, opaque_bptree_t** tree_da
     *tree_data = (opaque_bptree_t*) new su::BPTree(get_tree_content(tree_filename));
     return read_okay;
 }
+#endif // UNIFRAC_WASM (file-reading helpers; WASM uses load_bptree_opaque from a Newick string)
 
 void load_bptree_opaque(const char* newick, opaque_bptree_t** tree_data) {
     SETUP_TDBG("load_bptree_opaque")
@@ -294,12 +300,14 @@ void initialize_mat_full_no_biom_T(TMat* &result, const char* const * sample_ids
     uint64_t msize = sizeof(TReal) * n_samples_64 * n_samples_64;
     if (mmap_dir==NULL) {
       result->matrix = (TReal*)malloc(msize);
-    } else {
+    }
+#ifndef UNIFRAC_WASM
+    else {
       std::string mmap_template(mmap_dir);
       mmap_template+="/su_mmap_XXXXXX";
       // note: mkstemp/mkostemp will update mmap_template in place
 #ifdef O_NOATIME
-      int fd=mkostemp((char *) mmap_template.c_str(), O_NOATIME ); 
+      int fd=mkostemp((char *) mmap_template.c_str(), O_NOATIME );
 #else
       int fd=mkstemp((char *) mmap_template.c_str() );
 #endif
@@ -321,6 +329,7 @@ void initialize_mat_full_no_biom_T(TMat* &result, const char* const * sample_ids
         }
       }
    }
+#endif // UNIFRAC_WASM (mmap path; WASM always takes the malloc branch)
 
     for(unsigned int i = 0; i < n_samples; i++) {
         result->sample_ids[i] = strdup(sample_ids[i]);
@@ -379,19 +388,22 @@ inline void destroy_mat_full_T(TMat** result) {
         free((*result)->sample_ids[i]);   
     };                                        
     free((*result)->sample_ids);          
-    if (((*result)->matrix)!=NULL) {          
+    if (((*result)->matrix)!=NULL) {
       if (((*result)->flags & MMAP_FLAG) == 0)  {
-         free((*result)->matrix);            
-      } else {
+         free((*result)->matrix);
+      }
+#ifndef UNIFRAC_WASM
+      else {
          uint64_t n_samples = (*result)->n_samples;
          munmap((*result)->matrix, sizeof(TReal)*n_samples*n_samples);
 
          int fd = (*result)->flags & MMAP_FD_MASK;
          close(fd);
       }
+#endif // UNIFRAC_WASM (no mmap-backed matrices in WASM build)
       (*result)->matrix=NULL;
-    }                                         
-    free(*result);                        
+    }
+    free(*result);
 }
 
 
@@ -524,6 +536,7 @@ compute_status one_off_inmem_cpp(su::biom_interface &table, const su::BPTree &tr
     return okay;
 }
 
+#ifndef UNIFRAC_WASM
 compute_status partial_v3(const char* biom_filename, const char* tree_filename,
                           const char* unifrac_method, bool variance_adjust, double alpha, bool bypass_tips, bool normalize_sample_counts,
                           unsigned int n_substeps, unsigned int stripe_start, unsigned int stripe_stop,
@@ -629,6 +642,7 @@ compute_status one_off_wtree_v3(const char* biom_filename, const opaque_bptree_t
     // condensed form
     return one_off_inmem_cpp(table, tree, unifrac_method, variance_adjust, alpha, bypass_tips, normalize_sample_counts, n_substeps, result);
 }
+#endif // UNIFRAC_WASM (file-based v3 entries)
 
 /*
  * ==============================   one_off_matrix
@@ -715,6 +729,7 @@ compute_status one_off_matrix_v3_T(su::biom_inmem &table, const su::BPTree &tree
     }
 }
 
+#ifndef UNIFRAC_WASM
 compute_status one_off_matrix_v3(const char* biom_filename, const char* tree_filename,
                                  const char* unifrac_method, bool variance_adjust, double alpha,
                                  bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
@@ -771,6 +786,7 @@ compute_status one_off_matrix_fp32_v3t(const char* biom_filename, const opaque_b
     TDBG_STEP("load_files")
     return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
 }
+#endif // UNIFRAC_WASM (file-based one_off_matrix wrappers)
 
 compute_status one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                        const char* unifrac_method, bool variance_adjust, double alpha,
@@ -946,6 +962,7 @@ inline std::vector<std::string> stringlist_to_vector(const char *stringlist) {
 }
 
 
+#ifndef UNIFRAC_WASM
 // Internal: Make sure TReal and real_id match
 template<class TReal, class TMat>
 inline compute_status compute_permanova_T(const char *grouping_filename, unsigned int n_columns, const char* const* columns,
@@ -1598,6 +1615,7 @@ compute_status unifrac_multi_to_file_v3(const char* biom_filename, const char* t
 
    return rc;
 }
+#endif // UNIFRAC_WASM (compute_permanova / unifrac_to_file / HDF5 helpers / unifrac_multi)
 
 IOStatus write_mat(const char* output_filename, mat_t* result) {
     std::ofstream output;
@@ -1782,6 +1800,7 @@ IOStatus write_mat_from_matrix_fp32(const char* filename, mat_full_fp32_t* resul
     return write_mat_from_matrix_txt_T(filename, result);
 }
 
+#ifndef UNIFRAC_WASM
 // Internal: Make sure TReal and real_id match
 template<class TReal, class TMat>
 inline IOStatus write_mat_from_matrix_hdf5_T(const char* output_filename, TMat * result, hid_t real_id,
@@ -1952,6 +1971,7 @@ IOStatus write_mat_from_matrix_hdf5_fp32_v2(const char* output_filename, mat_ful
   return write_mat_from_matrix_hdf5_T<float,mat_full_fp32_t>(output_filename,result,H5T_IEEE_F32LE,pcoa_dims,save_dist,
                         stat_n_vals,stat_method_arr,stat_name_arr,stat_val_arr,stat_pval_arr,stat_perm_count_arr,stat_group_name_arr,stat_group_count_arr);
 }
+#endif // UNIFRAC_WASM (write_mat_from_matrix_hdf5 family)
 
 IOStatus write_vec(const char* output_filename, r_vec* result) {
     std::ofstream output;
@@ -1969,6 +1989,7 @@ IOStatus write_vec(const char* output_filename, r_vec* result) {
     return write_okay;
 }
 
+#ifndef UNIFRAC_WASM
 IOStatus write_partial(const char* output_filename, const partial_mat_t* result) {
     int fd = open(output_filename, O_WRONLY | O_CREAT | O_TRUNC,  S_IRUSR |  S_IWUSR );
     if (fd==-1) return write_error;
@@ -2485,6 +2506,8 @@ MergeStatus merge_partial_to_mmap_matrix(partial_dyn_mat_t* * partial_mats, int 
 MergeStatus merge_partial_to_mmap_matrix_fp32(partial_dyn_mat_t* * partial_mats, int n_partials, const char *mmap_dir, mat_full_fp32_t** result) {
   return merge_partial_to_matrix_T<float,mat_full_fp32_t>(partial_mats, n_partials, mmap_dir, result);
 }
+
+#endif // UNIFRAC_WASM (partial I/O + merge)
 
 // compat versions
 

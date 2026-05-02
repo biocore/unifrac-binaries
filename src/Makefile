@@ -1,4 +1,4 @@
-.PHONY: all main api api_acc test test_binaries install install_lib clean rapi_test
+.PHONY: all main api api_acc test test_binaries install install_lib clean rapi_test wasm_gate_check
 
 PLATFORM := $(shell uname -s)
 COMPILER := $(shell (h5c++ -v 2>&1) | tr A-Z a-z )
@@ -357,6 +357,14 @@ rapi_test: unifrac_task.cpp unifrac_accapi.cpp tree.o biom.o biom_inmem.o biom_s
 
 clean:
 	-rm -f *.o $(SSU) $(FPD) *.a test_su test_ska test_api test_su_api lib$(SSU).so unifrac_task_noclass_*.cpp unifrac_task_api_*.h unifrac_task.cpp $(UNIFRAC_ACC_SHLIBS)
+
+# Stage 1 helper: prove the WASM-bound translation units compile under
+# -DUNIFRAC_WASM=1 with no HDF5 / lz4 in the include path. Uses plain g++
+# -fsyntax-only; the authoritative validation is the emcc build added in
+# Stage 2. Set SKBB_DIR=/path/to/scikit-bio-binaries to also check
+# skbio_alt.cpp; otherwise that TU is skipped with a notice.
+wasm_gate_check:
+	bash $(CURDIR)/tests/wasm/check_gates.sh
 
 clean_install:
 	-(cd ${PREFIX}/lib && rm -f lib$(SSU).so $(UNIFRAC_ACC_SHLIBS))
