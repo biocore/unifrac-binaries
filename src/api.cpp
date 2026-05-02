@@ -994,6 +994,26 @@ void destroy_subsampled_inmem(opaque_biom_inmem_t **t) {
     delete sub;
 }
 
+compute_status compute_permanova_inmem_fp64(const double *mat, unsigned int n_dims,
+                                             const uint32_t *grouping,
+                                             unsigned int permanova_perms,
+                                             double *fstat, double *pvalue) {
+    if (mat == NULL || grouping == NULL || fstat == NULL || pvalue == NULL) return grouping_missing;
+    if (n_dims == 0 || permanova_perms == 0) return grouping_missing;
+    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
+    return okay;
+}
+
+compute_status compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims,
+                                             const uint32_t *grouping,
+                                             unsigned int permanova_perms,
+                                             float *fstat, float *pvalue) {
+    if (mat == NULL || grouping == NULL || fstat == NULL || pvalue == NULL) return grouping_missing;
+    if (n_dims == 0 || permanova_perms == 0) return grouping_missing;
+    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
+    return okay;
+}
+
 /*
  * ==============================   one_dense_pair
  */

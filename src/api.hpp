@@ -703,6 +703,36 @@ EXTERN ComputeStatus compute_permanova_fp32(const char *grouping_filename, unsig
                                             mat_full_fp32_t * result, unsigned int permanova_perms,
                                             float *fstats, float *pvalues);
 
+/* Compute PERMANOVA from in-memory inputs.
+ *
+ * In-memory analogue of compute_permanova_fp64 that bypasses the TSV
+ * grouping parser. Required for the WASM build (no filesystem access)
+ * and useful in any embedding context where labels are already in
+ * memory. Determinism is governed by the global RNG: call
+ * ssu_set_random_seed(seed) before invoking this function for
+ * reproducible p-values; skbb's portable Fisher-Yates means results
+ * are bit-exact across native and WASM builds at the same seed.
+ *
+ * mat              <const double*> distance matrix, n_dims x n_dims, row-major.
+ * n_dims           <unsigned int>  size of the matrix.
+ * grouping         <const uint32_t*> length-n_dims integer group labels;
+ *                  caller-built. Group ids do not need to be contiguous.
+ * permanova_perms  <unsigned int>  number of permutations, > 0.
+ * fstat            <double*>       out, computed F statistic.
+ * pvalue           <double*>       out, computed p-value.
+ *
+ * Returns okay on success; permanova_failed on bad input.
+ */
+EXTERN ComputeStatus compute_permanova_inmem_fp64(const double *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  double *fstat, double *pvalue);
+
+EXTERN ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  float *fstat, float *pvalue);
+
 /* Write a matrix object using the text format
  *
  * filename <const char*> the file to write into
