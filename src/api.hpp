@@ -241,7 +241,12 @@ EXTERN unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t);
 EXTERN unsigned int subsampled_n_obs(const opaque_biom_inmem_t *t);
 
 /* Fetch a dense per-OTU vector of counts. Returns false if obs_id is not
- * present (out is left untouched in that case). */
+ * present (out is left untouched in that case).
+ *
+ * Note: O(n_obs) lookup — the implementation linear-scans the obs_ids
+ * vector. Fine for the browser-scale tables this WASM build targets.
+ * Iterating over all OTUs by repeatedly calling this is O(n_obs^2);
+ * walk by index via subsampled_get_obs_id + this function instead. */
 EXTERN bool subsampled_get_obs_data(const opaque_biom_inmem_t *t,
                                     const char *obs_id,
                                     double *out);

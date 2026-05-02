@@ -78,10 +78,16 @@ docker run --rm -t \
         libopenblas-dev libblas-dev liblapacke-dev
 
     # Steps 2/3 in main.yml — checkout sibling skbb at the pinned
-    # commit + setup-emsdk + setup-node.
+    # commit + setup-emsdk + setup-node. Single-shot fetch of the
+    # pinned ref (the default-branch HEAD is not interesting; we go
+    # straight to the SHA we want).
     cd /work
-    git clone --depth 1 https://github.com/scikit-bio/scikit-bio-binaries.git scikit-bio-binaries
-    ( cd scikit-bio-binaries && git fetch --depth=1 origin "${SKBB_REF}" && git checkout "${SKBB_REF}" )
+    mkdir -p scikit-bio-binaries
+    ( cd scikit-bio-binaries \
+        && git init -q \
+        && git remote add origin https://github.com/scikit-bio/scikit-bio-binaries.git \
+        && git fetch --depth=1 origin "${SKBB_REF}" \
+        && git checkout -q FETCH_HEAD )
 
     if [ ! -d /opt/emsdk ]; then
       git clone --depth 1 https://github.com/emscripten-core/emsdk.git /opt/emsdk

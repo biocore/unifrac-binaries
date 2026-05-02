@@ -128,10 +128,18 @@ no pthread, no HDF5, no lz4, no mmap, no file I/O) and exposes only the
 in-memory subset of the C API: `one_off_matrix_inmem_v3`,
 `faith_pd_inmem`, `subsample_table_inmem`, the existing in-memory v2
 compat wrappers (`one_off_matrix_inmem_v2`, `one_off_inmem`,
-`one_dense_pair_v2`, etc.), `compute_pcoa_inmem_*` (via the existing
-`pcoa()` wrapper), and `compute_permanova_inmem_fp{64,32}`. The
-file-based v3 entry points and the partial-compute / merge-partial
-paths are excluded at compile time via `#ifndef UNIFRAC_WASM` blocks.
+`one_dense_pair_v2`, `one_dense_pair_v2t`, etc.), the in-memory PCoA
+wrapper (`pcoa()` and `pcoa_fp32()`), and
+`compute_permanova_inmem_fp{64,32}`. The file-based v3 entry points
+and the partial-compute / merge-partial paths are excluded at compile
+time via `#ifndef UNIFRAC_WASM` blocks.
+
+Note: `one_off_matrix_inmem_v3` requires the explicit `_fp64`-suffixed
+method names (`"unweighted_fp64"`, `"weighted_normalized_fp64"`,
+`"weighted_unnormalized_fp64"`, `"generalized_fp64"`). The bare
+`"unweighted"` etc. names map to fp32 internally and need
+`one_off_matrix_inmem_fp32_v3`. WASM embedders most commonly want fp64
+for downstream PCoA stability; pick the suffix accordingly.
 
 Linear algebra (PCoA, PERMANOVA) is delegated to the
 [scikit-bio-binaries](https://github.com/scikit-bio/scikit-bio-binaries)
