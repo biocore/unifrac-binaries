@@ -223,6 +223,13 @@ wasm_test: $(SKBB_DIR)/src/libskbb_wasm.a
 wasm_clean:
 	cd src && $(MAKE) wasm_clean
 
+# Run the WASM build + tests inside a hermetic ubuntu:24.04 container
+# that mirrors the GitHub Actions build-and-test-wasm job. Catches the
+# class of bug where a local conda env quietly provides headers that
+# the CI runner doesn't have. Requires docker.
+wasm_local_ci:
+	bash $(CURDIR)/scripts/local_ci_wasm.sh
+
 # Sentinel rule: ensure skbb's WASM artifact exists. If not, build it.
 # FORCE-prereq trick keeps Make from re-entering skbb on every invocation
 # once the file exists; once it does, this rule is a no-op test. If skbb
