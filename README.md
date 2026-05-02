@@ -116,6 +116,86 @@ Note: If you prefer to build your HDF5 toolchain yourself,
 more information about how to setup the 
 stack can be found [here](https://support.hdfgroup.org/HDF5/Tutor/compile.html).
 
+## WebAssembly (WASM) build
+
+unifrac-binaries can also be compiled to WebAssembly for use in
+browser-targeted or `duckdb-wasm`-based projects. This build produces
+a static archive, `libssu_wasm.a`, that downstream emscripten projects
+can link into a final `.wasm` module.
+
+The WASM variant is single-threaded, CPU-only (no OpenMP, no GPU,
+no pthread, no HDF5, no lz4, no mmap, no file I/O) and exposes only the
+in-memory subset of the C API: `one_off_matrix_inmem_v3`,
+`faith_pd_inmem`, `subsample_table_inmem`, the existing in-memory v2
+compat wrappers (`one_off_matrix_inmem_v2`, `one_off_inmem`,
+`one_dense_pair_v2`, etc.), `compute_pcoa_inmem_*` (via the existing
+`pcoa()` wrapper), and `compute_permanova_inmem_fp{64,32}`. The
+file-based v3 entry points and the partial-compute / merge-partial
+paths are excluded at compile time via `#ifndef UNIFRAC_WASM` blocks.
+
+Linear algebra (PCoA, PERMANOVA) is delegated to the
+[scikit-bio-binaries](https://github.com/scikit-bio/scikit-bio-binaries)
+WASM build (Eigen-backed; no LAPACK/BLAS dependency under WASM). The
+unifrac WASM build links statically against `libskbb_wasm.a`.
+
+### Prerequisites
+
+- An activated [emsdk](https://emscripten.org/docs/getting_started/downloads.html)
+  (tested with version 3.1.71) on PATH.
+- Node.js 20+ (for running the WASM test suite).
+- A sibling checkout of scikit-bio-binaries built with `make wasm`,
+  pinned to upstream merge commit `bed8f41` ("Wasm 260424") or later.
+
+### Building
+
+```bash
+# Build skbb's WASM artifact first
+( cd ../scikit-bio-binaries && make wasm )
+
+# Build unifrac-binaries' WASM artifact
+make wasm
+```
+
+To use a non-sibling skbb checkout, set `SKBB_DIR`:
+
+```bash
+make wasm SKBB_DIR=/path/to/scikit-bio-binaries
+```
+
+### Running the test suite
+
+```bash
+make wasm_test
+```
+
+This builds and runs seven Node.js-driven tests covering: tree parsing
+(smoke); Faith's PD; subsampling (count conservation + seed
+determinism); PCoA (eigenvalues / proportion / sample coords vs. native
+oracle); PERMANOVA (fstat / pvalue vs. native oracle); end-to-end
+UniFrac matrix correctness across four methods (unweighted, weighted
+normalized, weighted unnormalized, generalized); and the existing
+public C API smoke test (`test/capi_inmem_test.c`).
+
+Native-generated expected-value headers under `src/tests/wasm/expected/`
+are committed to the repository. To regenerate them after a numerical
+change, install LAPACKE/OpenBLAS plus a native skbb build (e.g.
+`conda install scikit-bio-binaries libopenblas liblapacke`) and run:
+
+```bash
+make -C src wasm_regen_pcoa_expected
+make -C src wasm_regen_permanova_expected
+make -C src wasm_regen_unifrac_expected
+```
+
+### Out of scope
+
+The following are deliberately **not** part of the WASM build: GPU
+offload, partial-compute / merge-partial, HDF5 BIOM v2 reading, mmap-
+backed full matrices, the `ssu` and `faithpd` CLI binaries, and
+multi-threaded execution. The browser-targeted use case is for small
+to moderate cohorts (single-digit thousands of samples or fewer);
+larger workloads should continue to use the native build.
+
 # Environment considerations
 
 ## Multi-core support
