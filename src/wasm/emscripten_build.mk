@@ -148,13 +148,42 @@ test_subsample_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_subsample
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
-wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js test_subsample_wasm.js
+test_pcoa_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_pcoa_wasm.cpp \
+                  tests/wasm/check_macros.hpp \
+                  tests/wasm/expected/pcoa_expected.h \
+                  $(WASM_SKBB_STAGED_HS)
+	$(WASM_CXX) $(WASM_CXXFLAGS) tests/wasm/test_pcoa_wasm.cpp \
+	    libssu_wasm.a $(WASM_SKBB_LIB) \
+	    $(WASM_TEST_LDFLAGS) -o $@
+
+# Regenerate src/tests/wasm/expected/pcoa_expected.h from a NATIVE skbb
+# build. Requires conda env (or equivalent) providing libskbb.so plus its
+# transitive deps (lapacke, openblas, openmp). Override SKBB_NATIVE_PREFIX
+# to point at a different install root if libskbb isn't on the system path:
+#   make wasm_regen_pcoa_expected SKBB_NATIVE_PREFIX=/path/to/conda/env
+SKBB_NATIVE_PREFIX ?= $(CONDA_PREFIX)
+WASM_REGEN_CXXFLAGS := -std=c++17 -O2 -fopenmp \
+                       -I$(SKBB_NATIVE_PREFIX)/include \
+                       -L$(SKBB_NATIVE_PREFIX)/lib \
+                       -Wl,-rpath,$(SKBB_NATIVE_PREFIX)/lib
+WASM_REGEN_LDLIBS := -lskbb -llapacke -lopenblas
+
+wasm_regen_pcoa_expected: tests/wasm/generate_pcoa_expected.cpp
+	$(CXX) $(WASM_REGEN_CXXFLAGS) tests/wasm/generate_pcoa_expected.cpp \
+	    $(WASM_REGEN_LDLIBS) -o generate_pcoa_expected.exe
+	@mkdir -p tests/wasm/expected
+	OMP_NUM_THREADS=1 ./generate_pcoa_expected.exe > tests/wasm/expected/pcoa_expected.h
+	@echo "Regenerated tests/wasm/expected/pcoa_expected.h"
+
+wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js test_subsample_wasm.js test_pcoa_wasm.js
 	@echo "--- smoke ---"
 	node test_smoke_wasm.js
 	@echo "--- faith_pd ---"
 	node test_faith_pd_wasm.js
 	@echo "--- subsample ---"
 	node test_subsample_wasm.js
+	@echo "--- pcoa ---"
+	node test_pcoa_wasm.js
 
 # --------------------------------------------------------------------------
 # Cleanup
