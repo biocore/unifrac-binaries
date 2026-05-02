@@ -872,6 +872,50 @@ compute_status one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, co
     return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
 }
 
+compute_status faith_pd_inmem(const support_biom_t *table_data,
+                              const support_bptree_t *tree_data,
+                              r_vec** result) {
+    SETUP_TDBG("faith_pd_inmem")
+    if (tree_data == NULL) return tree_missing;
+    if (table_data == NULL) return table_missing;
+
+    su::biom_inmem table(table_data->obs_ids,
+                         table_data->sample_ids,
+                         table_data->indices,
+                         table_data->indptr,
+                         table_data->data,
+                         table_data->n_obs,
+                         table_data->n_samples);
+    su::BPTree tree(tree_data->structure,
+                    tree_data->lengths,
+                    tree_data->names,
+                    tree_data->n_parens);
+
+    VALIDATE_TREE_TABLE(tree, table)
+    TDBG_STEP("load_files")
+
+    // Filter out any elements with zero counts (mirrors faith_pd_one_off).
+    su::biom_inmem table_nz(table, 1.0);
+    if ((table_nz.n_samples == 0) || (table_nz.n_obs == 0)) {
+        fprintf(stderr, "WARNING: All samples had zero counts. Forcing zero result.\n");
+        SYNC_TREE_TABLE(tree, table)
+        TDBG_STEP("sync_tree_table")
+        initialize_results_vec(*result, table);
+    } else {
+        if ((table_nz.n_samples != table.n_samples) || (table_nz.n_obs != table.n_obs)) {
+            fprintf(stderr, "WARNING: Some samples had zero counts and were filtered out.\n");
+        }
+        SYNC_TREE_TABLE(tree, table_nz)
+        TDBG_STEP("sync_tree_table")
+
+        initialize_results_vec(*result, table_nz);
+        su::faith_pd(table_nz, tree_sheared, std::ref((*result)->values));
+        TDBG_STEP("faith_pd")
+    }
+
+    return okay;
+}
+
 /*
  * ==============================   one_dense_pair
  */

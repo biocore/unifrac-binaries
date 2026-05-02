@@ -492,6 +492,24 @@ EXTERN ComputeStatus one_dense_pair_v2(unsigned int n_obs, const char ** obs_ids
 EXTERN ComputeStatus faith_pd_one_off(const char* biom_filename, const char* tree_filename,
                                       r_vec** result);
 
+/* compute Faith PD from in-memory inputs.
+ *
+ * In-memory analogue of faith_pd_one_off. Accepts a sparse table and a
+ * pre-built tree directly, with no filesystem access. Required for the
+ * WASM build and useful for any embedding context where BIOM v2 (HDF5)
+ * is unavailable or undesired.
+ *
+ * table_data <support_biom_t*> CSR-encoded feature table.
+ * tree_data  <support_bptree_t*> balanced-parens tree structure.
+ * result     <r_vec**> the resulting vector of computed Faith PD values.
+ *
+ * Returns the same error codes as faith_pd_one_off, plus tree_missing
+ * if tree_data is NULL.
+ */
+EXTERN ComputeStatus faith_pd_inmem(const support_biom_t *table_data,
+                                    const support_bptree_t *tree_data,
+                                    r_vec** result);
+
 /* Compute UniFrac and save to file
  *
  * biom_filename <const char*> the filename to the biom table.
