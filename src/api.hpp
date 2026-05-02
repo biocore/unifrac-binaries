@@ -205,6 +205,54 @@ EXTERN void destroy_bptree_opaque(opaque_bptree_t** tree_data);
 /* Return number of elements in BPTree, equvalent to n_parens */
 EXTERN int get_bptree_opaque_els(opaque_bptree_t* tree_data);
 
+/* Opaque subsampled-table handle for externalizing su::biom_subsampled.
+ * Do not assume anything about the internals of the pointer.
+ */
+typedef struct opaque_biom_inmem {
+    int dummy;
+} opaque_biom_inmem_t;
+
+/* Subsample a feature table in memory.
+ *
+ * Wraps su::skbio_biom_subsampled. Determinism is governed by the global
+ * RNG: call ssu_set_random_seed(seed) before invoking this function to
+ * obtain reproducible subsampling.
+ *
+ * Samples whose total count is less than `depth` are dropped from the
+ * output. OTUs that end up with zero counts in every surviving sample
+ * are likewise dropped.
+ *
+ * table_data       <support_biom_t*> CSR-encoded input table.
+ * depth            <unsigned int>    target per-sample read depth.
+ * with_replacement <bool>            true = multinomial; false = permute.
+ * out              <opaque_biom_inmem_t**> opaque handle to the
+ *                  subsampled table; query via subsampled_* accessors;
+ *                  release via destroy_subsampled_inmem.
+ *
+ * Returns table_empty if the input has no samples or no observations,
+ * okay otherwise.
+ */
+EXTERN ComputeStatus subsample_table_inmem(const support_biom_t *table_data,
+                                           unsigned int depth,
+                                           bool with_replacement,
+                                           opaque_biom_inmem_t **out);
+
+EXTERN unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t);
+EXTERN unsigned int subsampled_n_obs(const opaque_biom_inmem_t *t);
+
+/* Fetch a dense per-OTU vector of counts. Returns false if obs_id is not
+ * present (out is left untouched in that case). */
+EXTERN bool subsampled_get_obs_data(const opaque_biom_inmem_t *t,
+                                    const char *obs_id,
+                                    double *out);
+
+/* Returns NULL if idx is out of range. The returned pointer remains
+ * valid until destroy_subsampled_inmem is called. */
+EXTERN const char* subsampled_get_sample_id(const opaque_biom_inmem_t *t, unsigned int idx);
+EXTERN const char* subsampled_get_obs_id(const opaque_biom_inmem_t *t, unsigned int idx);
+
+EXTERN void destroy_subsampled_inmem(opaque_biom_inmem_t **t);
+
 /* Compute UniFrac - condensed form
  *
  * biom_filename <const char*> the filename to the biom table.

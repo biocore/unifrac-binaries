@@ -916,6 +916,84 @@ compute_status faith_pd_inmem(const support_biom_t *table_data,
     return okay;
 }
 
+compute_status subsample_table_inmem(const support_biom_t *table_data,
+                                     unsigned int depth,
+                                     bool with_replacement,
+                                     opaque_biom_inmem_t **out) {
+    SETUP_TDBG("subsample_table_inmem")
+    if (table_data == NULL) return table_missing;
+    if ((table_data->n_samples <= 0) || (table_data->n_obs <= 0)) {
+        return table_empty;
+    }
+
+    su::biom_inmem table(table_data->obs_ids,
+                         table_data->sample_ids,
+                         table_data->indices,
+                         table_data->indptr,
+                         table_data->data,
+                         table_data->n_obs,
+                         table_data->n_samples);
+    TDBG_STEP("load_table")
+
+    // su::skbio_biom_subsampled draws from the global skbb-side mt19937
+    // (re-seedable via ssu_set_random_seed). Heap-allocate so it survives
+    // the function return as an opaque handle.
+    su::skbio_biom_subsampled *sub = new su::skbio_biom_subsampled(table, with_replacement, depth);
+    *out = (opaque_biom_inmem_t*) sub;
+    TDBG_STEP("subsample")
+    return okay;
+}
+
+unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t) {
+    if (t == NULL) return 0;
+    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    return sub->n_samples;
+}
+
+unsigned int subsampled_n_obs(const opaque_biom_inmem_t *t) {
+    if (t == NULL) return 0;
+    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    return sub->n_obs;
+}
+
+bool subsampled_get_obs_data(const opaque_biom_inmem_t *t,
+                             const char *obs_id,
+                             double *out) {
+    if (t == NULL || obs_id == NULL || out == NULL) return false;
+    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const std::vector<std::string> &ids = sub->get_obs_ids();
+    for (size_t i = 0; i < ids.size(); i++) {
+        if (ids[i] == obs_id) {
+            sub->get_obs_data(ids[i], out);
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* subsampled_get_sample_id(const opaque_biom_inmem_t *t, unsigned int idx) {
+    if (t == NULL) return NULL;
+    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const std::vector<std::string> &ids = sub->get_sample_ids();
+    if (idx >= ids.size()) return NULL;
+    return ids[idx].c_str();
+}
+
+const char* subsampled_get_obs_id(const opaque_biom_inmem_t *t, unsigned int idx) {
+    if (t == NULL) return NULL;
+    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const std::vector<std::string> &ids = sub->get_obs_ids();
+    if (idx >= ids.size()) return NULL;
+    return ids[idx].c_str();
+}
+
+void destroy_subsampled_inmem(opaque_biom_inmem_t **t) {
+    if (t == NULL || *t == NULL) return;
+    su::skbio_biom_subsampled *sub = (su::skbio_biom_subsampled*) (*t);
+    *t = NULL;
+    delete sub;
+}
+
 /*
  * ==============================   one_dense_pair
  */

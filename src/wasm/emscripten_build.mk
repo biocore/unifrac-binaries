@@ -142,11 +142,19 @@ test_faith_pd_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_faith_pd_w
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
-wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js
+test_subsample_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_subsample_wasm.cpp \
+                       tests/wasm/check_macros.hpp $(WASM_SKBB_STAGED_HS)
+	$(WASM_CXX) $(WASM_CXXFLAGS) tests/wasm/test_subsample_wasm.cpp \
+	    libssu_wasm.a $(WASM_SKBB_LIB) \
+	    $(WASM_TEST_LDFLAGS) -o $@
+
+wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js test_subsample_wasm.js
 	@echo "--- smoke ---"
 	node test_smoke_wasm.js
 	@echo "--- faith_pd ---"
 	node test_faith_pd_wasm.js
+	@echo "--- subsample ---"
+	node test_subsample_wasm.js
 
 # --------------------------------------------------------------------------
 # Cleanup
