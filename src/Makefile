@@ -1,5 +1,10 @@
 .PHONY: all main api api_acc test test_binaries install install_lib clean rapi_test wasm_gate_check
 
+# WASM build rules. Defines `wasm`, `wasm_test`, `wasm_clean` PHONY targets
+# plus per-TU `.wasm.o` and `libssu_wasm.a` rules. Top-level invocation:
+#   make wasm SKBB_DIR=/path/to/scikit-bio-binaries
+include wasm/emscripten_build.mk
+
 PLATFORM := $(shell uname -s)
 COMPILER := $(shell (h5c++ -v 2>&1) | tr A-Z a-z )
 

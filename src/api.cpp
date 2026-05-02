@@ -653,9 +653,15 @@ template<class TReal, class TMat>
 compute_status one_off_matrix_T(su::biom_interface &table, const su::BPTree &tree,
                                 const char* unifrac_method, bool variance_adjust, double alpha,
                                 bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                const char *mmap_dir,  
+                                const char *mmap_dir,
                                 TMat** result) {
     SETUP_TDBG("one_off_matrix_inmem")
+#ifdef UNIFRAC_WASM
+    // mmap-backed matrices are not supported under WASM (no real fd
+    // semantics in the browser sandbox). Force malloc path regardless of
+    // what the caller passed.
+    mmap_dir = NULL;
+#endif
     if (mmap_dir!=NULL) {
      if (mmap_dir[0]==0) mmap_dir = NULL; // easier to have a simple test going on
     }

@@ -23,7 +23,10 @@
 
 #include "unifrac_internal.hpp"
 
-#if defined(__APPLE__) || defined(UNIFRAC_WASM)
+#if defined(__APPLE__) && !defined(CPU_SETSIZE)
+#define CPU_SETSIZE 32
+#endif
+#if defined(UNIFRAC_WASM) && !defined(CPU_SETSIZE)
 #define CPU_SETSIZE 32
 #endif
 

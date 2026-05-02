@@ -34,3 +34,14 @@
 # WebAssembly build artifacts
 *.wasm
 .wasm-cache/
+src/.wasm-skbb-include/
+
+# Python bytecode from src/generate_*.py invocations
+__pycache__/
+*.pyc
+
+# Generated CPU translation units (produced by the python generators in src/)
+src/unifrac_accapi_cpu.cpp
+src/unifrac_task_noclass_cpu.cpp
+src/unifrac_accapi.cpp
+src/unifrac_task.cpp

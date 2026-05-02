@@ -1,4 +1,13 @@
-.PHONY: test clean all clean_install
+.PHONY: test clean all clean_install wasm wasm_test wasm_clean
+
+# Serialize top-level targets ONLY when a wasm target is involved. The
+# native generators for unifrac_accapi_cpu.cpp / unifrac_task_noclass_cpu.cpp
+# are shared between the native and WASM sub-makes; a concurrent
+# `make all wasm` could fire the python generators twice and truncate
+# each other's output. Native-only `make -j8 all` is unaffected.
+ifneq (,$(filter wasm wasm_test wasm_clean,$(MAKECMDGOALS)))
+.NOTPARALLEL:
+endif
 
 PLATFORM := $(shell uname -s)
 
@@ -193,4 +202,35 @@ test_binaries:
 test:
 	cd src && $(MAKE) test
 	cd test && $(MAKE) test
+
+########### WASM
+
+# Build libssu_wasm.a. Requires that scikit-bio-binaries' libskbb_wasm.a
+# already exists (run `make wasm` in that repo first), and that an emsdk
+# is activated on PATH. Override SKBB_DIR for a non-sibling skbb checkout:
+#   make wasm SKBB_DIR=/path/to/scikit-bio-binaries
+#
+# Default sibling layout (../scikit-bio-binaries) is checked first; if
+# its libskbb_wasm.a is missing, this target builds it before proceeding.
+SKBB_DIR ?= $(abspath $(CURDIR)/../scikit-bio-binaries)
+
+wasm: $(SKBB_DIR)/src/libskbb_wasm.a
+	cd src && $(MAKE) SKBB_DIR=$(SKBB_DIR) wasm
+
+wasm_test: $(SKBB_DIR)/src/libskbb_wasm.a
+	cd src && $(MAKE) SKBB_DIR=$(SKBB_DIR) wasm_test
+
+wasm_clean:
+	cd src && $(MAKE) wasm_clean
+
+# Sentinel rule: ensure skbb's WASM artifact exists. If not, build it.
+# FORCE-prereq trick keeps Make from re-entering skbb on every invocation
+# once the file exists; once it does, this rule is a no-op test. If skbb
+# itself changes, downstream callers are expected to rebuild it explicitly,
+# which is the same contract skbb's other consumers have.
+$(SKBB_DIR)/src/libskbb_wasm.a: FORCE
+	@test -f $@ || (cd $(SKBB_DIR) && $(MAKE) wasm)
+
+FORCE:
+.PHONY: FORCE
 
