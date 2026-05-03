@@ -998,8 +998,7 @@ compute_status compute_permanova_inmem_fp64(const double *mat, unsigned int n_di
                                              const uint32_t *grouping,
                                              unsigned int permanova_perms,
                                              double *fstat, double *pvalue) {
-    if (mat == NULL || grouping == NULL || fstat == NULL || pvalue == NULL) return grouping_missing;
-    if (n_dims == 0 || permanova_perms == 0) return grouping_missing;
+    if (mat == NULL || grouping == NULL) return grouping_missing;
     su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
     return okay;
 }
@@ -1008,8 +1007,7 @@ compute_status compute_permanova_inmem_fp32(const float *mat, unsigned int n_dim
                                              const uint32_t *grouping,
                                              unsigned int permanova_perms,
                                              float *fstat, float *pvalue) {
-    if (mat == NULL || grouping == NULL || fstat == NULL || pvalue == NULL) return grouping_missing;
-    if (n_dims == 0 || permanova_perms == 0) return grouping_missing;
+    if (mat == NULL || grouping == NULL) return grouping_missing;
     su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
     return okay;
 }

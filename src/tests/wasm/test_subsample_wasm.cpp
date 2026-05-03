@@ -8,42 +8,27 @@
  */
 
 /*
- * Stage 4 WASM test for subsample_table_inmem.
+ * WASM test for subsample_table_inmem. No external oracle: assertions
+ * are structural (per-sample rarefied count == depth, conservation,
+ * seed determinism).
  *
- * No external ground-truth oracle is needed — assertions are structural
- * (per-sample rarefied count == depth, conservation, seed determinism).
- *
- * Fixture: same 5-OTU / 6-sample CSR table from test/capi_inmem_test.c
- * used by Stage 3. Per-sample input totals are
- *   {7, 3, 7, 4, 3, 4}; subsampling depth 2 keeps all 6 samples.
- *
- * Determinism is governed by the global skbb-side mt19937; we re-seed
- * before each subsampling call via ssu_set_random_seed and assert that
- * two calls with the same seed produce bit-identical per-sample dense
- * vectors.
+ * Per-sample input totals are {7, 3, 7, 4, 3, 4}; subsampling depth 2
+ * keeps all 6 samples.
  */
 
 #include "tests/wasm/check_macros.hpp"
+#include "tests/wasm/fixtures.hpp"
 #include "api.hpp"
 
-#include <cstdint>
 #include <cstring>
-
-static const int n_obs  = 5;
-static const int n_samp = 6;
-static const char* const obs_ids[]   = {"GG_OTU_1", "GG_OTU_2", "GG_OTU_3", "GG_OTU_4", "GG_OTU_5"};
-static const char* const samp_ids[]  = {"Sample1", "Sample2", "Sample3", "Sample4", "Sample5", "Sample6"};
-static const uint32_t    indices[]   = {2, 0, 1, 3, 4, 5, 2, 3, 5, 0, 1, 2, 5, 1, 2};
-static const uint32_t    indptr[]    = {0, 1, 6, 9, 13, 15};
-static const double      data[]      = {1., 5., 1., 2., 3., 1., 1., 4., 2., 2., 1., 1., 1., 1., 1.};
 
 static void run_subsample(opaque_biom_inmem_t **out, unsigned int seed) {
     ssu_set_random_seed(seed);
     const support_biom_t table = {
-        (char**) obs_ids, (char**) samp_ids,
-        (uint32_t*) indices, (uint32_t*) indptr,
-        (double*) data,
-        n_obs, n_samp, 0
+        (char**) FIXTURE_OBS_IDS, (char**) FIXTURE_SAMP_IDS,
+        (uint32_t*) FIXTURE_INDICES, (uint32_t*) FIXTURE_INDPTR,
+        (double*) FIXTURE_DATA,
+        FIXTURE_N_OBS, FIXTURE_N_SAMP, 0
     };
     ComputeStatus status = subsample_table_inmem(&table, /*depth=*/2u,
                                                  /*with_replacement=*/false,
@@ -52,15 +37,13 @@ static void run_subsample(opaque_biom_inmem_t **out, unsigned int seed) {
     CHECK(*out != nullptr);
 }
 
-// Sum each surviving sample's counts across all OTUs into per_sample_sum.
-// Returns the number of surviving samples (== subsampled_n_samples).
 static unsigned int collect_per_sample_sums(const opaque_biom_inmem_t *sub,
                                             double *per_sample_sum) {
     unsigned int n_s = subsampled_n_samples(sub);
     unsigned int n_o = subsampled_n_obs(sub);
     for (unsigned int j = 0; j < n_s; j++) per_sample_sum[j] = 0.0;
 
-    double row[64];                                // n_samp <= 64 fixture-bound
+    double row[64];
     CHECK(n_s <= 64);
     for (unsigned int i = 0; i < n_o; i++) {
         const char *obs_id = subsampled_get_obs_id(sub, i);
@@ -74,8 +57,6 @@ static unsigned int collect_per_sample_sums(const opaque_biom_inmem_t *sub,
     return n_s;
 }
 
-// Pull the full dense subsampled table into a flat buffer (row-major,
-// n_obs rows × n_samples cols) for byte-exact comparison across runs.
 static void collect_dense(const opaque_biom_inmem_t *sub,
                           double *flat, unsigned int max_cells) {
     unsigned int n_s = subsampled_n_samples(sub);
@@ -97,15 +78,12 @@ int main(void) {
     constexpr unsigned int SEED     = 42;
     constexpr unsigned int FLAT_CAP = 1024;
 
-    // (1) Run subsampling once. All 6 input samples have totals >= depth,
-    //     so all 6 survive.
     opaque_biom_inmem_t *sub_a = nullptr;
     run_subsample(&sub_a, SEED);
     CHECK_EQ(subsampled_n_samples(sub_a), 6);
     CHECK(subsampled_n_obs(sub_a) >= 1);
     CHECK(subsampled_n_obs(sub_a) <= 5);
 
-    // (2) Each surviving sample's rarefied count must equal DEPTH.
     {
         double per_sample[6] = {0};
         unsigned int n_s = collect_per_sample_sums(sub_a, per_sample);
@@ -120,7 +98,7 @@ int main(void) {
         }
     }
 
-    // (3) Re-seed and run again; output must be bit-identical.
+    // Re-seed; output must be bit-identical.
     opaque_biom_inmem_t *sub_b = nullptr;
     run_subsample(&sub_b, SEED);
     CHECK_EQ(subsampled_n_samples(sub_b), subsampled_n_samples(sub_a));
@@ -141,10 +119,8 @@ int main(void) {
         }
     }
 
-    // (4) A different seed must (almost certainly) produce different
-    //     output. We don't strictly need this — the bit-equality check
-    //     above already proves seed plumbing — but it guards against a
-    //     no-op stub silently passing both branches.
+    // Different seed must (almost certainly) produce different output —
+    // guards against a no-op stub silently passing the equality branches.
     opaque_biom_inmem_t *sub_c = nullptr;
     run_subsample(&sub_c, SEED + 1);
     {
@@ -156,8 +132,6 @@ int main(void) {
         for (unsigned int k = 0; k < cells; k++) {
             if (flat_a[k] != flat_c[k]) diffs++;
         }
-        // Our fixture is small; "different" means at least 1 differing
-        // cell across the whole 5x6 table.
         CHECK(diffs >= 1);
     }
 

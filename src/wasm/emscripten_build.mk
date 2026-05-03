@@ -201,16 +201,15 @@ wasm_regen_permanova_expected: tests/wasm/generate_permanova_expected.cpp
 # unifrac in-memory subset directly with -DUNIFRAC_WASM=1 (so file-based
 # paths and the HDF5/lz4 deps drop out) and links against skbb-build's
 # libskbb.so, mirroring the WASM toolchain's compile flags and link surface.
-WASM_REGEN_UNIFRAC_SRCS := tree.cpp biom_inmem.cpp biom_subsampled.cpp \
-                          unifrac.cpp unifrac_internal.cpp skbio_alt.cpp \
-                          api.cpp unifrac_accapi_cpu.cpp \
-                          unifrac_task_noclass_cpu.cpp unifrac_cmp.cpp
-
 wasm_regen_unifrac_expected: tests/wasm/generate_unifrac_expected.cpp \
                             unifrac_accapi_cpu.cpp unifrac_task_noclass_cpu.cpp
 	$(CXX) $(WASM_REGEN_CXXFLAGS) -DUNIFRAC_WASM=1 -DSKIP_MMAP=1 -DNOGPU=1 \
 	    -DSUCMP_NM=su_cpu -I. \
-	    $(WASM_REGEN_UNIFRAC_SRCS) tests/wasm/generate_unifrac_expected.cpp \
+	    tree.cpp biom_inmem.cpp biom_subsampled.cpp \
+	    unifrac.cpp unifrac_internal.cpp skbio_alt.cpp \
+	    api.cpp unifrac_accapi_cpu.cpp \
+	    unifrac_task_noclass_cpu.cpp unifrac_cmp.cpp \
+	    tests/wasm/generate_unifrac_expected.cpp \
 	    $(WASM_REGEN_LDLIBS) -o generate_unifrac_expected.exe
 	@mkdir -p tests/wasm/expected
 	OMP_NUM_THREADS=1 ./generate_unifrac_expected.exe > tests/wasm/expected/unifrac_expected.h

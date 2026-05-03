@@ -8,18 +8,12 @@
  */
 
 /*
- * Stage 7 end-to-end WASM correctness test.
+ * End-to-end WASM correctness test.
  *
  * Runs one_off_matrix_inmem_v3 under WASM for each in-scope UniFrac
- * method on a synthetic 5-OTU / 6-sample fixture, and compares the
- * resulting 6x6 distance matrix to the corresponding native oracle in
- * src/tests/wasm/expected/unifrac_expected.h.
- *
- * Methods covered:
- *   - unweighted_fp64
- *   - weighted_normalized_fp64
- *   - weighted_unnormalized_fp64
- *   - generalized_fp64 (alpha = 1.0)
+ * method and compares the resulting 6x6 distance matrix to the
+ * corresponding native oracle in
+ *   src/tests/wasm/expected/unifrac_expected.h.
  *
  * Tolerance: 1e-5 absolute, matching src/testdata/validation_tests.sh.
  *
@@ -27,52 +21,38 @@
  *   src/tests/wasm/generate_unifrac_expected.cpp
  * which compiles the same unifrac source files NATIVELY with
  * -DUNIFRAC_WASM=1 + skbb-build's libskbb.so. Both paths therefore
- * exercise identical unifrac source through different toolchains; the
- * test is a cross-toolchain numerical-equivalence check on the full
- * UniFrac compute pipeline.
+ * exercise identical unifrac source through different toolchains.
  */
 
 #include "tests/wasm/check_macros.hpp"
+#include "tests/wasm/fixtures.hpp"
 #include "tests/wasm/expected/unifrac_expected.h"
 #include "api.hpp"
 
-#include <cstdint>
-#include <cstdlib>
+struct MethodCase {
+    const char* label;
+    const char* method_arg;
+    const double* expected;
+};
 
-static const int N_OBS  = 5;
-static const int N_SAMP = 6;
-static const char* const OBS_IDS[]   = {"GG_OTU_1", "GG_OTU_2", "GG_OTU_3", "GG_OTU_4", "GG_OTU_5"};
-static const char* const SAMP_IDS[]  = {"Sample1", "Sample2", "Sample3", "Sample4", "Sample5", "Sample6"};
-static const uint32_t    INDICES[]   = {2, 0, 1, 3, 4, 5, 2, 3, 5, 0, 1, 2, 5, 1, 2};
-static const uint32_t    INDPTR[]    = {0, 1, 6, 9, 13, 15};
-static const double      DATA[]      = {1., 5., 1., 2., 3., 1., 1., 4., 2., 2., 1., 1., 1., 1., 1.};
+static const MethodCase METHODS[] = {
+    {"unweighted",            "unweighted_fp64",            UNIFRAC_EXPECTED_UNWEIGHTED},
+    {"weighted_normalized",   "weighted_normalized_fp64",   UNIFRAC_EXPECTED_WEIGHTED_NORMALIZED},
+    {"weighted_unnormalized", "weighted_unnormalized_fp64", UNIFRAC_EXPECTED_WEIGHTED_UNNORMALIZED},
+    {"generalized",           "generalized_fp64",           UNIFRAC_EXPECTED_GENERALIZED},
+};
 
-static const unsigned int NPARENS = 16;
-static const bool   STRUCTURE[] = { true, true, false, true,
-                                    true, false, true, false,
-                                    false, true, true, false,
-                                    true, false, false, false };
-static const double LENGTHS[]   = { 0.0, 1.0, 0.0, 1.0,
-                                    1.0, 0.0, 1.0, 0.0,
-                                    0.0, 1.0, 1.0, 0.0,
-                                    1.0, 0.0, 0.0, 0.0 };
-static const char* const NAMES[] = {"", "GG_OTU_1", "", "",
-                                    "GG_OTU_2", "", "GG_OTU_3", "",
-                                    "", "", "GG_OTU_5", "",
-                                    "GG_OTU_4", "", "", ""};
-
-static void compare_method(const char* method_label, const char* method_arg,
-                           double alpha, const double* expected) {
-    const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
-                                    (uint32_t*) INDICES, (uint32_t*) INDPTR,
-                                    (double*) DATA, N_OBS, N_SAMP, 0};
-    const support_bptree_t tree  = {(bool*) STRUCTURE, (double*) LENGTHS,
-                                    (char**) NAMES, (int) NPARENS};
+static void compare_method(const MethodCase &mc) {
+    const support_biom_t   table = {(char**) FIXTURE_OBS_IDS, (char**) FIXTURE_SAMP_IDS,
+                                    (uint32_t*) FIXTURE_INDICES, (uint32_t*) FIXTURE_INDPTR,
+                                    (double*) FIXTURE_DATA, FIXTURE_N_OBS, FIXTURE_N_SAMP, 0};
+    const support_bptree_t tree  = {(bool*) FIXTURE_STRUCTURE, (double*) FIXTURE_LENGTHS,
+                                    (char**) FIXTURE_NAMES, (int) FIXTURE_NPARENS};
 
     mat_full_fp64_t* result = nullptr;
     ComputeStatus status = one_off_matrix_inmem_v3(
-        &table, &tree, method_arg,
-        /*variance_adjust*/ false, /*alpha*/ alpha,
+        &table, &tree, mc.method_arg,
+        /*variance_adjust*/ false, /*alpha*/ 1.0,
         /*bypass_tips*/ false, /*normalize_sample_counts*/ true,
         /*n_substeps*/ 1,
         /*subsample_depth*/ 0, /*subsample_with_replacement*/ false,
@@ -83,32 +63,27 @@ static void compare_method(const char* method_label, const char* method_arg,
     CHECK(result != nullptr);
     CHECK_EQ(result->n_samples, UNIFRAC_EXPECTED_N);
 
-    const unsigned int total = N_SAMP * N_SAMP;
+    const unsigned int total = FIXTURE_N_SAMP * FIXTURE_N_SAMP;
     for (unsigned int i = 0; i < total; i++) {
-        if (!almost_equal<double>(result->matrix[i], expected[i], 1e-5)) {
+        if (!almost_equal<double>(result->matrix[i], mc.expected[i], 1e-5)) {
             std::fprintf(stderr,
                 "FAIL %s entry [%u/%u] = %.10g; expected %.10g\n",
-                method_label, i / N_SAMP, i % N_SAMP,
-                result->matrix[i], expected[i]);
+                mc.label, i / FIXTURE_N_SAMP, i % FIXTURE_N_SAMP,
+                result->matrix[i], mc.expected[i]);
             std::exit(1);
         }
     }
 
     destroy_mat_full_fp64(&result);
-    std::fprintf(stdout, "  %-22s OK\n", method_label);
+    std::fprintf(stdout, "  %-22s OK\n", mc.label);
 }
 
 int main(void) {
     CHECK_EQ(UNIFRAC_EXPECTED_N, 6u);
 
-    compare_method("unweighted",            "unweighted_fp64",            1.0,
-                   UNIFRAC_EXPECTED_UNWEIGHTED);
-    compare_method("weighted_normalized",   "weighted_normalized_fp64",   1.0,
-                   UNIFRAC_EXPECTED_WEIGHTED_NORMALIZED);
-    compare_method("weighted_unnormalized", "weighted_unnormalized_fp64", 1.0,
-                   UNIFRAC_EXPECTED_WEIGHTED_UNNORMALIZED);
-    compare_method("generalized",           "generalized_fp64",           1.0,
-                   UNIFRAC_EXPECTED_GENERALIZED);
+    for (const auto &mc : METHODS) {
+        compare_method(mc);
+    }
 
     std::fprintf(stdout, "OK test_unifrac_e2e_wasm\n");
     return 0;

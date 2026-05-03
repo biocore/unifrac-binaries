@@ -8,80 +8,55 @@
  */
 
 /*
- * Native ground-truth generator for src/tests/wasm/test_unifrac_e2e_wasm.cpp.
+ * Native ground-truth generator for
+ * src/tests/wasm/test_unifrac_e2e_wasm.cpp.
  *
- * Computes the 6x6 UniFrac distance matrix for each supported method on
- * the synthetic 5-OTU/6-sample fixture (the same fixture as Stages 3-6,
- * a known-good native input). Results are emitted as a hex-encoded C
- * header consumed by the WASM test.
- *
- * Built natively against unifrac-binaries' own in-memory subset
- * (libssu inmem-only build) plus skbb-build conda env's libskbb.so.
- * The unifrac TUs are compiled with -DUNIFRAC_WASM=1 so the file-based
- * paths are gated out; this keeps the generator HDF5/lz4-free.
+ * Computes the 6x6 UniFrac distance matrix for each supported method
+ * on the synthetic fixture. Built natively against unifrac-binaries'
+ * own in-memory subset (libssu inmem-only build) plus skbb-build's
+ * libskbb.so. The unifrac TUs are compiled with -DUNIFRAC_WASM=1 so
+ * the file-based paths are gated out; this keeps the generator
+ * HDF5/lz4-free.
  *
  * Build & run via the wasm_regen_unifrac_expected Makefile target.
  */
 
-#include <cstdio>
-#include <cstdlib>
-#include <cstdint>
-#include <cstring>
-
+#include "tests/wasm/fixtures.hpp"
 #include "api.hpp"
 
-// Same fixture as Stages 3-6.
-static const int N_OBS  = 5;
-static const int N_SAMP = 6;
-static const char* const OBS_IDS[]   = {"GG_OTU_1", "GG_OTU_2", "GG_OTU_3", "GG_OTU_4", "GG_OTU_5"};
-static const char* const SAMP_IDS[]  = {"Sample1", "Sample2", "Sample3", "Sample4", "Sample5", "Sample6"};
-static const uint32_t    INDICES[]   = {2, 0, 1, 3, 4, 5, 2, 3, 5, 0, 1, 2, 5, 1, 2};
-static const uint32_t    INDPTR[]    = {0, 1, 6, 9, 13, 15};
-static const double      DATA[]      = {1., 5., 1., 2., 3., 1., 1., 4., 2., 2., 1., 1., 1., 1., 1.};
+#include <cstdlib>
 
-// Multifurcating tree: root has three children (GG_OTU_1, clade12,
-// clade45). Branch lengths set to 1.0 so the metrics are non-trivial.
-// Same topology as Stage 3's faith_pd test.
-static const unsigned int NPARENS = 16;
-static const bool   STRUCTURE[] = { true, true, false, true,
-                                    true, false, true, false,
-                                    false, true, true, false,
-                                    true, false, false, false };
-static const double LENGTHS[]   = { 0.0, 1.0, 0.0, 1.0,
-                                    1.0, 0.0, 1.0, 0.0,
-                                    0.0, 1.0, 1.0, 0.0,
-                                    1.0, 0.0, 0.0, 0.0 };
-static const char* const NAMES[] = {"", "GG_OTU_1", "", "",
-                                    "GG_OTU_2", "", "GG_OTU_3", "",
-                                    "", "", "GG_OTU_5", "",
-                                    "GG_OTU_4", "", "", ""};
+struct MethodCase {
+    const char* label;
+    const char* method_arg;
+};
 
-static void emit_method(const char* method_label, const char* method_arg, double alpha) {
-    const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
-                                    (uint32_t*) INDICES, (uint32_t*) INDPTR,
-                                    (double*) DATA, N_OBS, N_SAMP, 0};
-    const support_bptree_t tree  = {(bool*) STRUCTURE, (double*) LENGTHS,
-                                    (char**) NAMES, (int) NPARENS};
+static const MethodCase METHODS[] = {
+    {"UNWEIGHTED",            "unweighted_fp64"},
+    {"WEIGHTED_NORMALIZED",   "weighted_normalized_fp64"},
+    {"WEIGHTED_UNNORMALIZED", "weighted_unnormalized_fp64"},
+    {"GENERALIZED",           "generalized_fp64"},
+};
+
+static void emit_method(const MethodCase &mc) {
+    const support_biom_t   table = {(char**) FIXTURE_OBS_IDS, (char**) FIXTURE_SAMP_IDS,
+                                    (uint32_t*) FIXTURE_INDICES, (uint32_t*) FIXTURE_INDPTR,
+                                    (double*) FIXTURE_DATA, FIXTURE_N_OBS, FIXTURE_N_SAMP, 0};
+    const support_bptree_t tree  = {(bool*) FIXTURE_STRUCTURE, (double*) FIXTURE_LENGTHS,
+                                    (char**) FIXTURE_NAMES, (int) FIXTURE_NPARENS};
 
     mat_full_fp64_t* result = nullptr;
     ComputeStatus status = one_off_matrix_inmem_v3(
-        &table, &tree, method_arg,
-        /*variance_adjust*/ false, /*alpha*/ alpha,
-        /*bypass_tips*/ false, /*normalize_sample_counts*/ true,
-        /*n_substeps*/ 1,
-        /*subsample_depth*/ 0, /*subsample_with_replacement*/ false,
-        /*mmap_dir*/ NULL,
-        &result);
+        &table, &tree, mc.method_arg,
+        false, 1.0, false, true, 1, 0, false, NULL, &result);
     if (status != okay || result == NULL) {
-        std::fprintf(stderr, "FAIL: %s -> status %d\n", method_label, (int) status);
+        std::fprintf(stderr, "FAIL: %s -> status %d\n", mc.label, (int) status);
         std::exit(1);
     }
 
-    std::printf("static const double UNIFRAC_EXPECTED_%s[%d] = {\n", method_label, N_SAMP * N_SAMP);
-    for (unsigned int i = 0; i < N_SAMP * N_SAMP; i++) {
-        std::printf("    %a%s\n", result->matrix[i], (i + 1 == N_SAMP * N_SAMP) ? "" : ",");
-    }
-    std::printf("};\n\n");
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "UNIFRAC_EXPECTED_%s", mc.label);
+    emit_array_double(buf, result->matrix, FIXTURE_N_SAMP * FIXTURE_N_SAMP);
 
     destroy_mat_full_fp64(&result);
 }
@@ -90,20 +65,18 @@ int main(void) {
     std::printf("/* AUTO-GENERATED by src/tests/wasm/generate_unifrac_expected.cpp.\n");
     std::printf(" * Do not hand-edit. Run `make wasm_regen_unifrac_expected` to refresh.\n");
     std::printf(" *\n");
-    std::printf(" * Synthetic 5-OTU/6-sample fixture (CSR-encoded table identical\n");
-    std::printf(" * to test/capi_inmem_test.c:21-27) on the multifurcating tree\n");
-    std::printf(" * topology with all branch lengths = 1.0 (same tree as Stage 3).\n");
-    std::printf(" * Generator runs natively against an in-memory-only build of\n");
-    std::printf(" * libssu (-DUNIFRAC_WASM=1) linked against skbb-build's libskbb.so.\n");
+    std::printf(" * Synthetic fixture (FIXTURE_OBS_IDS + FIXTURE_DATA + FIXTURE_STRUCTURE\n");
+    std::printf(" * with all branch lengths = 1.0, see src/tests/wasm/fixtures.hpp).\n");
+    std::printf(" * Generator runs natively against an in-memory-only build of libssu\n");
+    std::printf(" * (-DUNIFRAC_WASM=1) linked against skbb-build's libskbb.so.\n");
     std::printf(" */\n\n");
     std::printf("#ifndef UNIFRAC_WASM_UNIFRAC_EXPECTED_H\n");
     std::printf("#define UNIFRAC_WASM_UNIFRAC_EXPECTED_H\n\n");
-    std::printf("static const unsigned int UNIFRAC_EXPECTED_N = %d;\n\n", N_SAMP);
+    std::printf("static const unsigned int UNIFRAC_EXPECTED_N = %d;\n\n", FIXTURE_N_SAMP);
 
-    emit_method("UNWEIGHTED",            "unweighted_fp64",            1.0);
-    emit_method("WEIGHTED_NORMALIZED",   "weighted_normalized_fp64",   1.0);
-    emit_method("WEIGHTED_UNNORMALIZED", "weighted_unnormalized_fp64", 1.0);
-    emit_method("GENERALIZED",           "generalized_fp64",           1.0);
+    for (const auto &mc : METHODS) {
+        emit_method(mc);
+    }
 
     std::printf("#endif /* UNIFRAC_WASM_UNIFRAC_EXPECTED_H */\n");
     return 0;

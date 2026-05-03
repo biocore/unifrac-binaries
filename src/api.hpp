@@ -208,9 +208,7 @@ EXTERN int get_bptree_opaque_els(opaque_bptree_t* tree_data);
 /* Opaque subsampled-table handle for externalizing su::biom_subsampled.
  * Do not assume anything about the internals of the pointer.
  */
-typedef struct opaque_biom_inmem {
-    int dummy;
-} opaque_biom_inmem_t;
+typedef struct opaque_biom_inmem opaque_biom_inmem_t;
 
 /* Subsample a feature table in memory.
  *
