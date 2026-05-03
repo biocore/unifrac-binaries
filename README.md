@@ -138,8 +138,7 @@ Note: `one_off_matrix_inmem_v3` requires the explicit `_fp64`-suffixed
 method names (`"unweighted_fp64"`, `"weighted_normalized_fp64"`,
 `"weighted_unnormalized_fp64"`, `"generalized_fp64"`). The bare
 `"unweighted"` etc. names map to fp32 internally and need
-`one_off_matrix_inmem_fp32_v3`. WASM embedders most commonly want fp64
-for downstream PCoA stability; pick the suffix accordingly.
+`one_off_matrix_inmem_fp32_v3`.
 
 Linear algebra (PCoA, PERMANOVA) is delegated to the
 [scikit-bio-binaries](https://github.com/scikit-bio/scikit-bio-binaries)

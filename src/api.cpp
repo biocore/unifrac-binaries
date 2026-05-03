@@ -961,14 +961,10 @@ bool subsampled_get_obs_data(const opaque_biom_inmem_t *t,
                              double *out) {
     if (t == NULL || obs_id == NULL || out == NULL) return false;
     const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
-    const std::vector<std::string> &ids = sub->get_obs_ids();
-    for (size_t i = 0; i < ids.size(); i++) {
-        if (ids[i] == obs_id) {
-            sub->get_obs_data(ids[i], out);
-            return true;
-        }
-    }
-    return false;
+    std::string id_str(obs_id);
+    if (!sub->has_obs_id(id_str)) return false;
+    sub->get_obs_data(id_str, out);
+    return true;
 }
 
 const char* subsampled_get_sample_id(const opaque_biom_inmem_t *t, unsigned int idx) {
