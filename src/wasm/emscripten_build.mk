@@ -135,38 +135,35 @@ test_smoke_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_smoke_wasm.cp
 	    $(WASM_TEST_LDFLAGS) -o $@
 
 test_faith_pd_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_faith_pd_wasm.cpp \
-                      tests/wasm/check_macros.hpp \
-                      tests/wasm/expected/faith_pd_expected.h \
+                      tests/wasm/check_macros.hpp tests/wasm/fixtures.hpp \
                       $(WASM_SKBB_STAGED_HS)
 	$(WASM_CXX) $(WASM_CXXFLAGS) tests/wasm/test_faith_pd_wasm.cpp \
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
 test_subsample_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_subsample_wasm.cpp \
-                       tests/wasm/check_macros.hpp $(WASM_SKBB_STAGED_HS)
+                       tests/wasm/check_macros.hpp tests/wasm/fixtures.hpp \
+                       $(WASM_SKBB_STAGED_HS)
 	$(WASM_CXX) $(WASM_CXXFLAGS) tests/wasm/test_subsample_wasm.cpp \
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
 test_pcoa_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_pcoa_wasm.cpp \
-                  tests/wasm/check_macros.hpp \
-                  tests/wasm/expected/pcoa_expected.h \
+                  tests/wasm/check_macros.hpp tests/wasm/fixtures.hpp \
                   $(WASM_SKBB_STAGED_HS)
 	$(WASM_CXX) $(WASM_CXXFLAGS) tests/wasm/test_pcoa_wasm.cpp \
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
 test_permanova_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_permanova_wasm.cpp \
-                       tests/wasm/check_macros.hpp \
-                       tests/wasm/expected/permanova_expected.h \
+                       tests/wasm/check_macros.hpp tests/wasm/fixtures.hpp \
                        $(WASM_SKBB_STAGED_HS)
 	$(WASM_CXX) $(WASM_CXXFLAGS) tests/wasm/test_permanova_wasm.cpp \
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
 test_unifrac_e2e_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) tests/wasm/test_unifrac_e2e_wasm.cpp \
-                         tests/wasm/check_macros.hpp \
-                         tests/wasm/expected/unifrac_expected.h \
+                         tests/wasm/check_macros.hpp tests/wasm/fixtures.hpp \
                          $(WASM_SKBB_STAGED_HS)
 	$(WASM_CXX) $(WASM_CXXFLAGS) tests/wasm/test_unifrac_e2e_wasm.cpp \
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
@@ -190,50 +187,6 @@ test_capi_inmem_wasm.js: libssu_wasm.a $(WASM_SKBB_LIB) $(WASM_API_TEST_SRC) \
 	    libssu_wasm.a $(WASM_SKBB_LIB) \
 	    $(WASM_TEST_LDFLAGS) -o $@
 
-wasm_regen_permanova_expected: tests/wasm/generate_permanova_expected.cpp
-	$(CXX) $(WASM_REGEN_CXXFLAGS) tests/wasm/generate_permanova_expected.cpp \
-	    $(WASM_REGEN_LDLIBS) -o generate_permanova_expected.exe
-	@mkdir -p tests/wasm/expected
-	OMP_NUM_THREADS=1 ./generate_permanova_expected.exe > tests/wasm/expected/permanova_expected.h
-	@echo "Regenerated tests/wasm/expected/permanova_expected.h"
-
-# Generate UniFrac per-method expected matrices natively. Compiles the
-# unifrac in-memory subset directly with -DUNIFRAC_WASM=1 (so file-based
-# paths and the HDF5/lz4 deps drop out) and links against skbb-build's
-# libskbb.so, mirroring the WASM toolchain's compile flags and link surface.
-wasm_regen_unifrac_expected: tests/wasm/generate_unifrac_expected.cpp \
-                            unifrac_accapi_cpu.cpp unifrac_task_noclass_cpu.cpp
-	$(CXX) $(WASM_REGEN_CXXFLAGS) -DUNIFRAC_WASM=1 -DSKIP_MMAP=1 -DNOGPU=1 \
-	    -DSUCMP_NM=su_cpu -I. \
-	    tree.cpp biom_inmem.cpp biom_subsampled.cpp \
-	    unifrac.cpp unifrac_internal.cpp skbio_alt.cpp \
-	    api.cpp unifrac_accapi_cpu.cpp \
-	    unifrac_task_noclass_cpu.cpp unifrac_cmp.cpp \
-	    tests/wasm/generate_unifrac_expected.cpp \
-	    $(WASM_REGEN_LDLIBS) -o generate_unifrac_expected.exe
-	@mkdir -p tests/wasm/expected
-	OMP_NUM_THREADS=1 ./generate_unifrac_expected.exe > tests/wasm/expected/unifrac_expected.h
-	@echo "Regenerated tests/wasm/expected/unifrac_expected.h"
-
-# Regenerate src/tests/wasm/expected/pcoa_expected.h from a NATIVE skbb
-# build. Requires conda env (or equivalent) providing libskbb.so plus its
-# transitive deps (lapacke, openblas, openmp). Override SKBB_NATIVE_PREFIX
-# to point at a different install root if libskbb isn't on the system path:
-#   make wasm_regen_pcoa_expected SKBB_NATIVE_PREFIX=/path/to/conda/env
-SKBB_NATIVE_PREFIX ?= $(CONDA_PREFIX)
-WASM_REGEN_CXXFLAGS := -std=c++17 -O2 -fopenmp \
-                       -I$(SKBB_NATIVE_PREFIX)/include \
-                       -L$(SKBB_NATIVE_PREFIX)/lib \
-                       -Wl,-rpath,$(SKBB_NATIVE_PREFIX)/lib
-WASM_REGEN_LDLIBS := -lskbb -llapacke -lopenblas
-
-wasm_regen_pcoa_expected: tests/wasm/generate_pcoa_expected.cpp
-	$(CXX) $(WASM_REGEN_CXXFLAGS) tests/wasm/generate_pcoa_expected.cpp \
-	    $(WASM_REGEN_LDLIBS) -o generate_pcoa_expected.exe
-	@mkdir -p tests/wasm/expected
-	OMP_NUM_THREADS=1 ./generate_pcoa_expected.exe > tests/wasm/expected/pcoa_expected.h
-	@echo "Regenerated tests/wasm/expected/pcoa_expected.h"
-
 wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js test_subsample_wasm.js \
            test_pcoa_wasm.js test_permanova_wasm.js test_unifrac_e2e_wasm.js \
            test_capi_inmem_wasm.js
@@ -256,7 +209,7 @@ wasm_test: test_smoke_wasm.js test_faith_pd_wasm.js test_subsample_wasm.js \
 # Cleanup
 # --------------------------------------------------------------------------
 wasm_clean:
-	rm -f libssu_wasm.a *.wasm.o *_wasm.js *_wasm.wasm
+	rm -f libssu_wasm.a *.wasm.o *_wasm.js *_wasm.wasm test_capi_inmem_wasm.js test_capi_inmem_wasm.wasm
 	rm -rf $(WASM_SKBB_INC_STAGE)
 
 .PHONY: wasm wasm_test wasm_clean

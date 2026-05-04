@@ -40,7 +40,6 @@
 #define UNIFRAC_WASM_FIXTURES_HPP
 
 #include <cstdint>
-#include <cstdio>
 
 // ---- table (CSR) --------------------------------------------------------
 static const int        FIXTURE_N_OBS  = 5;
@@ -79,33 +78,5 @@ static const double FIXTURE_UNWEIGHTED_DIST[36] = {
 
 // 2-group split for PERMANOVA: arbitrary but fixed.
 static const uint32_t FIXTURE_GROUPING[6] = {0, 0, 1, 1, 1, 0};
-
-// ---- generator-only helpers ---------------------------------------------
-// Both helpers are header-only and `static inline`; only the generator
-// binaries reference them. Tests that don't need these are unaffected.
-
-#ifdef UNIFRAC_WASM_FIXTURES_USE_SKBB_SEED
-#include <random>
-#include <scikit-bio-binaries/util.h>
-
-// Replicates su::set_random_seed: seed mt19937 with `s`, draw one
-// uint32, pass that to skbb_set_random_seed. Generators must mirror
-// this so the seed seen by skbb matches what ssu_set_random_seed
-// produces under WASM.
-static inline void su_compatible_seed(uint32_t s) {
-    std::mt19937 g(s);
-    uint32_t skbb_seed = g();
-    skbb_set_random_seed(skbb_seed);
-}
-#endif
-
-// Emit a C-array initializer of hex-encoded doubles.
-static inline void emit_array_double(const char* name, const double* arr, unsigned int n) {
-    std::printf("static const double %s[%u] = {\n", name, n);
-    for (unsigned int i = 0; i < n; i++) {
-        std::printf("    %a%s\n", arr[i], (i + 1 == n) ? "" : ",");
-    }
-    std::printf("};\n\n");
-}
 
 #endif /* UNIFRAC_WASM_FIXTURES_HPP */

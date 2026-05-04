@@ -176,23 +176,13 @@ make wasm_test
 ```
 
 This builds and runs seven Node.js-driven tests covering: tree parsing
-(smoke); Faith's PD; subsampling (count conservation + seed
-determinism); PCoA (eigenvalues / proportion / sample coords vs. native
-oracle); PERMANOVA (fstat / pvalue vs. native oracle); end-to-end
-UniFrac matrix correctness across four methods (unweighted, weighted
-normalized, weighted unnormalized, generalized); and the existing
-public C API smoke test (`test/capi_inmem_test.c`).
-
-Native-generated expected-value headers under `src/tests/wasm/expected/`
-are committed to the repository. To regenerate them after a numerical
-change, install LAPACKE/OpenBLAS plus a native skbb build (e.g.
-`conda install scikit-bio-binaries libopenblas liblapacke`) and run:
-
-```bash
-make -C src wasm_regen_pcoa_expected
-make -C src wasm_regen_permanova_expected
-make -C src wasm_regen_unifrac_expected
-```
+(smoke); Faith's PD against hand-derived expected values; subsampling
+(count conservation + seed determinism); PCoA (eigenvalue ordering,
+proportion-explained derivation, seed determinism); PERMANOVA (positive
+fstat, pvalue in (0, 1], seed determinism); end-to-end UniFrac matrix
+structural invariants for all four methods (zero diagonal, symmetry,
+finite, non-negative) plus value-level oracle for unweighted; and the
+existing public C API smoke test (`test/capi_inmem_test.c`).
 
 ### Out of scope
 

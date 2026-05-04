@@ -171,6 +171,170 @@ void test_su_matrix(int num_cores){
 }
 
 
+// Branch lengths used by the in-memory Faith PD / subsample / permanova tests.
+// The shared `lengths[]` above is all-zero (which produces all-zero Faith PD);
+// override to unit lengths so the tree carries meaningful path information.
+const double lengths_unit[] = { 0., 1., 0., 1.,
+                                1., 0., 1., 0.,
+                                0., 1., 1., 0.,
+                                1., 0., 0., 0. };
+
+void test_faith_pd_inmem_capi(void) {
+    const support_biom_t   table = {(char**) obs_ids, (char**) samp_ids,
+                                    (uint32_t*) indices, (uint32_t*) indptr,
+                                    (double*) data, n_obs, n_samp, 0};
+    const support_bptree_t tree  = {(bool*) structure, (double*) lengths_unit,
+                                    (char**) names, nparens};
+
+    // Multifurcating tree with unit branches; expected per-sample PD computed
+    // by hand from the OTU sets implied by the CSR table.
+    const double exp_pd[] = {4., 5., 6., 3., 2., 5.};
+
+    r_vec* result = NULL;
+    ComputeStatus status = faith_pd_inmem(&table, &tree, &result);
+    err(status != okay, "faith_pd_inmem failed");
+    err(result == NULL, "faith_pd_inmem returned NULL");
+    err(result->n_samples != n_samp, "faith_pd_inmem n_samples mismatch");
+    for (unsigned int i = 0; i < n_samp; i++) {
+        err(fabs(result->values[i] - exp_pd[i]) > 1e-6, "faith_pd_inmem value mismatch");
+    }
+    destroy_results_vec(&result);
+
+    // Error path: NULL tree.
+    r_vec* tmp = NULL;
+    err(faith_pd_inmem(&table, NULL, &tmp) != tree_missing,
+        "faith_pd_inmem should reject NULL tree");
+    // Error path: NULL table.
+    err(faith_pd_inmem(NULL, &tree, &tmp) != table_missing,
+        "faith_pd_inmem should reject NULL table");
+}
+
+void test_subsample_inmem_capi(void) {
+    const support_biom_t table = {(char**) obs_ids, (char**) samp_ids,
+                                  (uint32_t*) indices, (uint32_t*) indptr,
+                                  (double*) data, n_obs, n_samp, 0};
+
+    // All six samples have counts >= 3 ({7,3,4,6,3,3}), so depth=3 retains
+    // every sample. Each retained sample sums to exactly depth.
+    const unsigned int depth = 3;
+
+    ssu_set_random_seed(42);
+    opaque_biom_inmem_t* sub = NULL;
+    err(subsample_table_inmem(&table, depth, false, &sub) != okay,
+        "subsample_table_inmem failed");
+    err(sub == NULL, "subsample_table_inmem returned NULL handle");
+
+    err(subsampled_n_samples(sub) != n_samp, "subsampled_n_samples mismatch");
+
+    // Sum each sample column across the dense observation rows; must equal depth.
+    unsigned int n_sub_obs = subsampled_n_obs(sub);
+    unsigned int n_sub_samp = subsampled_n_samples(sub);
+    double col_sums[6] = {0., 0., 0., 0., 0., 0.};
+    double row_buf[6];
+    for (unsigned int i = 0; i < n_sub_obs; i++) {
+        const char* oid = subsampled_get_obs_id(sub, i);
+        err(oid == NULL, "subsampled_get_obs_id returned NULL");
+        for (unsigned int j = 0; j < n_sub_samp; j++) row_buf[j] = 0.0;
+        err(!subsampled_get_obs_data(sub, oid, row_buf),
+            "subsampled_get_obs_data failed for valid obs id");
+        for (unsigned int j = 0; j < n_sub_samp; j++) col_sums[j] += row_buf[j];
+    }
+    for (unsigned int j = 0; j < n_sub_samp; j++) {
+        err(fabs(col_sums[j] - (double) depth) > 1e-9,
+            "subsample column sum != depth");
+    }
+
+    // Sample IDs round-trip.
+    for (unsigned int j = 0; j < n_sub_samp; j++) {
+        err(subsampled_get_sample_id(sub, j) == NULL,
+            "subsampled_get_sample_id returned NULL for in-range idx");
+    }
+    err(subsampled_get_sample_id(sub, n_sub_samp) != NULL,
+        "subsampled_get_sample_id should return NULL for out-of-range idx");
+    err(subsampled_get_obs_data(sub, "NOT_A_REAL_OTU", row_buf),
+        "subsampled_get_obs_data should reject unknown obs id");
+
+    // Determinism: identical seed reproduces the same data byte-for-byte.
+    opaque_biom_inmem_t* sub2 = NULL;
+    ssu_set_random_seed(42);
+    err(subsample_table_inmem(&table, depth, false, &sub2) != okay,
+        "subsample_table_inmem (second call) failed");
+    err(subsampled_n_obs(sub2) != n_sub_obs, "determinism: n_obs differs");
+    for (unsigned int i = 0; i < n_sub_obs; i++) {
+        const char* oid = subsampled_get_obs_id(sub, i);
+        double r1[6] = {0.}, r2[6] = {0.};
+        subsampled_get_obs_data(sub, oid, r1);
+        subsampled_get_obs_data(sub2, oid, r2);
+        for (unsigned int j = 0; j < n_sub_samp; j++) {
+            err(r1[j] != r2[j], "determinism: subsampled cell differs");
+        }
+    }
+
+    destroy_subsampled_inmem(&sub);
+    err(sub != NULL, "destroy_subsampled_inmem did not NULL the handle");
+    destroy_subsampled_inmem(&sub2);
+}
+
+void test_permanova_inmem_capi(int num_cores) {
+    // Build a real (non-degenerate) unweighted UniFrac matrix to feed into
+    // PERMANOVA. The shared `lengths[]` is all-zero, which would yield an
+    // all-zero distance matrix and a degenerate F-statistic — use unit
+    // branch lengths so the test exercises a meaningful pairwise structure.
+    const support_biom_t   table = {(char**) obs_ids, (char**) samp_ids,
+                                    (uint32_t*) indices, (uint32_t*) indptr,
+                                    (double*) data, n_obs, n_samp, 0};
+    const support_bptree_t tree  = {(bool*) structure, (double*) lengths_unit,
+                                    (char**) names, nparens};
+
+    mat_full_fp64_t* dm = NULL;
+    err(one_off_matrix_inmem_v2(&table, &tree, "unweighted_fp64",
+                                false, 1.0, false, num_cores,
+                                0, true, NULL, &dm) != okay,
+        "one_off_matrix_inmem_v2 failed");
+
+    const uint32_t grouping[] = {0, 0, 1, 1, 1, 0};
+
+    ssu_set_random_seed(42);
+    double fstat = 0.0, pvalue = 0.0;
+    err(compute_permanova_inmem_fp64(dm->matrix, dm->n_samples, grouping,
+                                     999, &fstat, &pvalue) != okay,
+        "compute_permanova_inmem_fp64 failed");
+    err(!(fstat > 0.0), "permanova fstat must be positive");
+    err(!(pvalue > 0.0 && pvalue <= 1.0), "permanova pvalue out of range");
+
+    // Determinism: re-seeding reproduces fstat AND pvalue exactly.
+    ssu_set_random_seed(42);
+    double fstat2 = 0.0, pvalue2 = 0.0;
+    err(compute_permanova_inmem_fp64(dm->matrix, dm->n_samples, grouping,
+                                     999, &fstat2, &pvalue2) != okay,
+        "compute_permanova_inmem_fp64 (rerun) failed");
+    err(fstat2 != fstat, "permanova fstat is not deterministic under fixed seed");
+    err(pvalue2 != pvalue, "permanova pvalue is not deterministic under fixed seed");
+
+    // Error paths.
+    err(compute_permanova_inmem_fp64(NULL, dm->n_samples, grouping, 9, &fstat, &pvalue) == okay,
+        "permanova should reject NULL matrix");
+    err(compute_permanova_inmem_fp64(dm->matrix, dm->n_samples, NULL, 9, &fstat, &pvalue) == okay,
+        "permanova should reject NULL grouping");
+
+    // fp32 variant on a fp32 matrix.
+    mat_full_fp32_t* dm32 = NULL;
+    err(one_off_matrix_inmem_fp32_v2(&table, &tree, "unweighted_fp32",
+                                     false, 1.0, false, num_cores,
+                                     0, true, NULL, &dm32) != okay,
+        "one_off_matrix_inmem_fp32_v2 failed");
+
+    ssu_set_random_seed(42);
+    float fstat32 = 0.0f, pvalue32 = 0.0f;
+    err(compute_permanova_inmem_fp32(dm32->matrix, dm32->n_samples, grouping,
+                                     999, &fstat32, &pvalue32) != okay,
+        "compute_permanova_inmem_fp32 failed");
+    err(!(fstat32 > 0.0f), "permanova fp32 fstat must be positive");
+
+    destroy_mat_full_fp64(&dm);
+    destroy_mat_full_fp32(&dm32);
+}
+
 int main(int argc, char** argv) {
     int num_cores = strtol(argv[1], NULL, 10);
 
@@ -178,6 +342,12 @@ int main(int argc, char** argv) {
     test_su_dense(num_cores);
     printf("Testing Striped UniFrac one_off matrix...\n");
     test_su_matrix(num_cores);
+    printf("Testing faith_pd_inmem...\n");
+    test_faith_pd_inmem_capi();
+    printf("Testing subsample_table_inmem + accessors...\n");
+    test_subsample_inmem_capi();
+    printf("Testing compute_permanova_inmem_fp64/fp32...\n");
+    test_permanova_inmem_capi(num_cores);
     printf("Tests passed.\n");
     return 0;
 }
