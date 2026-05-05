@@ -205,6 +205,53 @@ EXTERN void destroy_bptree_opaque(opaque_bptree_t** tree_data);
 /* Return number of elements in BPTree, equvalent to n_parens */
 EXTERN int get_bptree_opaque_els(opaque_bptree_t* tree_data);
 
+/* Opaque subsampled-table handle for externalizing su::biom_subsampled.
+ * Do not assume anything about the internals of the pointer.
+ */
+typedef struct opaque_biom_inmem opaque_biom_inmem_t;
+
+/* Subsample a feature table in memory.
+ *
+ * Wraps su::skbio_biom_subsampled. Determinism is governed by the global
+ * RNG: call ssu_set_random_seed(seed) before invoking this function to
+ * obtain reproducible subsampling.
+ *
+ * Samples whose total count is less than `depth` are dropped from the
+ * output. OTUs that end up with zero counts in every surviving sample
+ * are likewise dropped.
+ *
+ * table_data       <support_biom_t*> CSR-encoded input table.
+ * depth            <unsigned int>    target per-sample read depth.
+ * with_replacement <bool>            true = multinomial; false = permute.
+ * out              <opaque_biom_inmem_t**> opaque handle to the
+ *                  subsampled table; query via subsampled_* accessors;
+ *                  release via destroy_subsampled_inmem.
+ *
+ * Returns table_empty if the input has no samples or no observations,
+ * okay otherwise.
+ */
+EXTERN ComputeStatus subsample_table_inmem(const support_biom_t *table_data,
+                                           unsigned int depth,
+                                           bool with_replacement,
+                                           opaque_biom_inmem_t **out);
+
+EXTERN unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t);
+EXTERN unsigned int subsampled_n_obs(const opaque_biom_inmem_t *t);
+
+/* Fetch a dense per-OTU vector of counts. Returns false if obs_id is
+ * not present (out is left untouched in that case). O(1) lookup via
+ * biom_inmem's hash-indexed obs_id map. */
+EXTERN bool subsampled_get_obs_data(const opaque_biom_inmem_t *t,
+                                    const char *obs_id,
+                                    double *out);
+
+/* Returns NULL if idx is out of range. The returned pointer remains
+ * valid until destroy_subsampled_inmem is called. */
+EXTERN const char* subsampled_get_sample_id(const opaque_biom_inmem_t *t, unsigned int idx);
+EXTERN const char* subsampled_get_obs_id(const opaque_biom_inmem_t *t, unsigned int idx);
+
+EXTERN void destroy_subsampled_inmem(opaque_biom_inmem_t **t);
+
 /* Compute UniFrac - condensed form
  *
  * biom_filename <const char*> the filename to the biom table.
@@ -492,6 +539,24 @@ EXTERN ComputeStatus one_dense_pair_v2(unsigned int n_obs, const char ** obs_ids
 EXTERN ComputeStatus faith_pd_one_off(const char* biom_filename, const char* tree_filename,
                                       r_vec** result);
 
+/* compute Faith PD from in-memory inputs.
+ *
+ * In-memory analogue of faith_pd_one_off. Accepts a sparse table and a
+ * pre-built tree directly, with no filesystem access. Required for the
+ * WASM build and useful for any embedding context where BIOM v2 (HDF5)
+ * is unavailable or undesired.
+ *
+ * table_data <support_biom_t*> CSR-encoded feature table.
+ * tree_data  <support_bptree_t*> balanced-parens tree structure.
+ * result     <r_vec**> the resulting vector of computed Faith PD values.
+ *
+ * Returns the same error codes as faith_pd_one_off, plus tree_missing
+ * if tree_data is NULL.
+ */
+EXTERN ComputeStatus faith_pd_inmem(const support_biom_t *table_data,
+                                    const support_bptree_t *tree_data,
+                                    r_vec** result);
+
 /* Compute UniFrac and save to file
  *
  * biom_filename <const char*> the filename to the biom table.
@@ -636,6 +701,36 @@ EXTERN ComputeStatus compute_permanova_fp64(const char *grouping_filename, unsig
 EXTERN ComputeStatus compute_permanova_fp32(const char *grouping_filename, unsigned int n_columns, const char* * columns,
                                             mat_full_fp32_t * result, unsigned int permanova_perms,
                                             float *fstats, float *pvalues);
+
+/* Compute PERMANOVA from in-memory inputs.
+ *
+ * In-memory analogue of compute_permanova_fp64 that bypasses the TSV
+ * grouping parser. Required for the WASM build (no filesystem access)
+ * and useful in any embedding context where labels are already in
+ * memory. Determinism is governed by the global RNG: call
+ * ssu_set_random_seed(seed) before invoking this function for
+ * reproducible p-values; skbb's portable Fisher-Yates means results
+ * are bit-exact across native and WASM builds at the same seed.
+ *
+ * mat              <const double*> distance matrix, n_dims x n_dims, row-major.
+ * n_dims           <unsigned int>  size of the matrix.
+ * grouping         <const uint32_t*> length-n_dims integer group labels;
+ *                  caller-built. Group ids do not need to be contiguous.
+ * permanova_perms  <unsigned int>  number of permutations, > 0.
+ * fstat            <double*>       out, computed F statistic.
+ * pvalue           <double*>       out, computed p-value.
+ *
+ * Returns okay on success; permanova_failed on bad input.
+ */
+EXTERN ComputeStatus compute_permanova_inmem_fp64(const double *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  double *fstat, double *pvalue);
+
+EXTERN ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  float *fstat, float *pvalue);
 
 /* Write a matrix object using the text format
  *

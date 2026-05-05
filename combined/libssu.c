@@ -293,6 +293,69 @@ ComputeStatus faith_pd_one_off(const char* biom_filename, const char* tree_filen
    return (*dl_faith_pd_one_off)(biom_filename, tree_filename, result);
 }
 
+static ComputeStatus (*dl_faith_pd_inmem)(const support_biom_t*, const support_bptree_t*, r_vec**) = NULL;
+ComputeStatus faith_pd_inmem(const support_biom_t *table_data,
+                             const support_bptree_t *tree_data,
+                             r_vec** result) {
+   cond_ssu_load("faith_pd_inmem", (void **) &dl_faith_pd_inmem);
+
+   return (*dl_faith_pd_inmem)(table_data, tree_data, result);
+}
+
+/*********************************************************************/
+
+static ComputeStatus (*dl_subsample_table_inmem)(const support_biom_t*, unsigned int, bool, opaque_biom_inmem_t**) = NULL;
+static unsigned int (*dl_subsampled_n_samples)(const opaque_biom_inmem_t*) = NULL;
+static unsigned int (*dl_subsampled_n_obs)(const opaque_biom_inmem_t*) = NULL;
+static bool (*dl_subsampled_get_obs_data)(const opaque_biom_inmem_t*, const char*, double*) = NULL;
+static const char* (*dl_subsampled_get_sample_id)(const opaque_biom_inmem_t*, unsigned int) = NULL;
+static const char* (*dl_subsampled_get_obs_id)(const opaque_biom_inmem_t*, unsigned int) = NULL;
+static void (*dl_destroy_subsampled_inmem)(opaque_biom_inmem_t**) = NULL;
+
+ComputeStatus subsample_table_inmem(const support_biom_t *table_data,
+                                    unsigned int depth, bool with_replacement,
+                                    opaque_biom_inmem_t **out) {
+   cond_ssu_load("subsample_table_inmem", (void **) &dl_subsample_table_inmem);
+
+   return (*dl_subsample_table_inmem)(table_data, depth, with_replacement, out);
+}
+
+unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t) {
+   cond_ssu_load("subsampled_n_samples", (void **) &dl_subsampled_n_samples);
+
+   return (*dl_subsampled_n_samples)(t);
+}
+
+unsigned int subsampled_n_obs(const opaque_biom_inmem_t *t) {
+   cond_ssu_load("subsampled_n_obs", (void **) &dl_subsampled_n_obs);
+
+   return (*dl_subsampled_n_obs)(t);
+}
+
+bool subsampled_get_obs_data(const opaque_biom_inmem_t *t, const char *obs_id, double *out) {
+   cond_ssu_load("subsampled_get_obs_data", (void **) &dl_subsampled_get_obs_data);
+
+   return (*dl_subsampled_get_obs_data)(t, obs_id, out);
+}
+
+const char* subsampled_get_sample_id(const opaque_biom_inmem_t *t, unsigned int idx) {
+   cond_ssu_load("subsampled_get_sample_id", (void **) &dl_subsampled_get_sample_id);
+
+   return (*dl_subsampled_get_sample_id)(t, idx);
+}
+
+const char* subsampled_get_obs_id(const opaque_biom_inmem_t *t, unsigned int idx) {
+   cond_ssu_load("subsampled_get_obs_id", (void **) &dl_subsampled_get_obs_id);
+
+   return (*dl_subsampled_get_obs_id)(t, idx);
+}
+
+void destroy_subsampled_inmem(opaque_biom_inmem_t **t) {
+   cond_ssu_load("destroy_subsampled_inmem", (void **) &dl_destroy_subsampled_inmem);
+
+   (*dl_destroy_subsampled_inmem)(t);
+}
+
 /*********************************************************************/
 
 static ComputeStatus (*dl_unifrac_to_txt_file_v3)(const char*, const char*, const char*,
@@ -368,6 +431,27 @@ ComputeStatus compute_permanova_fp32(const char *grouping_filename, unsigned int
    cond_ssu_load("compute_permanova_fp32", (void **) &dl_compute_permanova_fp32);
 
    return (*dl_compute_permanova_fp32)(grouping_filename, n_columns, columns, result, permanova_perms, fstats, pvalues);
+}
+
+static ComputeStatus (*dl_compute_permanova_inmem_fp64)(const double*, unsigned int, const uint32_t*, unsigned int, double*, double*) = NULL;
+static ComputeStatus (*dl_compute_permanova_inmem_fp32)(const float*, unsigned int, const uint32_t*, unsigned int, float*, float*) = NULL;
+
+ComputeStatus compute_permanova_inmem_fp64(const double *mat, unsigned int n_dims,
+                                           const uint32_t *grouping,
+                                           unsigned int permanova_perms,
+                                           double *fstat, double *pvalue) {
+   cond_ssu_load("compute_permanova_inmem_fp64", (void **) &dl_compute_permanova_inmem_fp64);
+
+   return (*dl_compute_permanova_inmem_fp64)(mat, n_dims, grouping, permanova_perms, fstat, pvalue);
+}
+
+ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims,
+                                           const uint32_t *grouping,
+                                           unsigned int permanova_perms,
+                                           float *fstat, float *pvalue) {
+   cond_ssu_load("compute_permanova_inmem_fp32", (void **) &dl_compute_permanova_inmem_fp32);
+
+   return (*dl_compute_permanova_inmem_fp32)(mat, n_dims, grouping, permanova_perms, fstat, pvalue);
 }
 
 /*********************************************************************/

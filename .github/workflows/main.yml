@@ -138,3 +138,53 @@ jobs:
         pushd ci
         ./crawford_test.sh
         popd
+
+  # ----------------------------------------------------------------------
+  # WebAssembly build job. Single-threaded, CPU-only. Produces
+  # libssu_wasm.a and runs the WASM-side test suite under node, plus the
+  # public C API symmetry test (test/capi_inmem_test.c). Depends on a
+  # sibling scikit-bio-binaries checkout pinned to the upstream commit
+  # that added skbb's WASM build.
+  build-and-test-wasm:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout unifrac-binaries
+      uses: actions/checkout@v4
+      with:
+        path: unifrac-binaries
+    # Pin to the merge commit of scikit-bio/scikit-bio-binaries#12
+    # ("Wasm 260424"), which is the first upstream main commit that
+    # ships libskbb_wasm.a. Bump deliberately if we need newer skbb.
+    - name: Checkout scikit-bio-binaries
+      uses: actions/checkout@v4
+      with:
+        repository: scikit-bio/scikit-bio-binaries
+        ref: bed8f41002388608c5eeb57d8858dfc76df96ed9
+        path: scikit-bio-binaries
+    - name: Set up emsdk
+      uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: 3.1.71
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    # The wasm_regen_*_expected targets are developer-only and run
+    # outside CI; the expected-value headers under
+    # src/tests/wasm/expected/ are committed and consumed as-is.
+    # No native build deps required for the WASM build path itself —
+    # libskbb_wasm.a is Eigen-only.
+    - name: Build skbb WASM
+      working-directory: scikit-bio-binaries
+      run: make wasm
+    - name: Build unifrac-binaries WASM
+      working-directory: unifrac-binaries
+      run: make wasm SKBB_DIR=$GITHUB_WORKSPACE/scikit-bio-binaries
+    - name: Run WASM tests under node
+      working-directory: unifrac-binaries
+      run: make wasm_test SKBB_DIR=$GITHUB_WORKSPACE/scikit-bio-binaries
+    - name: Sanity check artifact
+      working-directory: unifrac-binaries
+      run: |
+        ls -la src/libssu_wasm.a
+        emar t src/libssu_wasm.a | head -20

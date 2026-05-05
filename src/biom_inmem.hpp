@@ -162,6 +162,9 @@ namespace su {
             virtual const std::vector<std::string> &get_sample_ids() const;
             virtual const std::vector<std::string> &get_obs_ids() const;
             virtual const double *get_sample_counts() const;
+
+            /* O(1) hash-backed presence check for an observation id. */
+            bool has_obs_id(const std::string &id) const { return obs_id_index.count(id) > 0; }
         protected:
             sparse_data resident_obj;
 

@@ -1654,6 +1654,181 @@ void test_faith_pd() {
     SUITE_END();
 }
 
+// Synthetic 5-OTU / 6-sample CSR fixture shared by the in-memory API tests
+// below. Identical to test/capi_inmem_test.c (table data) and the multi-
+// furcating tree from src/tests/wasm/fixtures.hpp (unit branch lengths).
+namespace inmem_fixture {
+    static const unsigned int N_OBS  = 5;
+    static const unsigned int N_SAMP = 6;
+    static const char* const  OBS_IDS[]  = {"GG_OTU_1","GG_OTU_2","GG_OTU_3","GG_OTU_4","GG_OTU_5"};
+    static const char* const  SAMP_IDS[] = {"Sample1","Sample2","Sample3","Sample4","Sample5","Sample6"};
+    static       uint32_t     INDICES[]  = {2, 0, 1, 3, 4, 5, 2, 3, 5, 0, 1, 2, 5, 1, 2};
+    static       uint32_t     INDPTR[]   = {0, 1, 6, 9, 13, 15};
+    static       double       DATA[]     = {1., 5., 1., 2., 3., 1., 1., 4., 2., 2., 1., 1., 1., 1., 1.};
+    static const unsigned int NPARENS = 16;
+    static       bool         STRUCTURE[] = { true, true, false, true,
+                                              true, false, true, false,
+                                              false, true, true, false,
+                                              true, false, false, false };
+    static       double       LENGTHS[]   = { 0., 1., 0., 1.,
+                                              1., 0., 1., 0.,
+                                              0., 1., 1., 0.,
+                                              1., 0., 0., 0. };
+    static const char* const  NAMES[]     = {"", "GG_OTU_1", "", "",
+                                             "GG_OTU_2", "", "GG_OTU_3", "",
+                                             "", "", "GG_OTU_5", "",
+                                             "GG_OTU_4", "", "", ""};
+    static const uint32_t     GROUPING[6] = {0, 0, 1, 1, 1, 0};
+}
+
+void test_faith_pd_inmem() {
+    SUITE_START("test faith_pd_inmem");
+
+    using namespace inmem_fixture;
+    const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                    INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+    const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+    // Hand-derived from the multifurcating tree (root → {OTU_1, {OTU_2,OTU_3},
+    // {OTU_5,OTU_4}}, all branches = 1.0) and the per-sample OTU sets
+    // implied by the CSR table.
+    double exp[6] = {4., 5., 6., 3., 2., 5.};
+
+    r_vec* res = NULL;
+    ComputeStatus rc = faith_pd_inmem(&table, &tree, &res);
+    ASSERT(rc == okay);
+    ASSERT(res != NULL);
+    ASSERT(res->n_samples == N_SAMP);
+    for (unsigned int i = 0; i < N_SAMP; i++) {
+        ASSERT(fabs(res->values[i] - exp[i]) < 1e-6);
+    }
+    destroy_results_vec(&res);
+
+    // Error paths.
+    r_vec* tmp = NULL;
+    ASSERT(faith_pd_inmem(&table, NULL, &tmp) == tree_missing);
+    ASSERT(faith_pd_inmem(NULL, &tree, &tmp) == table_missing);
+
+    SUITE_END();
+}
+
+void test_subsample_inmem() {
+    SUITE_START("test subsample_table_inmem + accessors");
+
+    using namespace inmem_fixture;
+    const support_biom_t table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                  INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+    const unsigned int depth = 3;
+
+    ssu_set_random_seed(42);
+    opaque_biom_inmem_t* sub = NULL;
+    ASSERT(subsample_table_inmem(&table, depth, false, &sub) == okay);
+    ASSERT(sub != NULL);
+
+    // All six per-sample counts ({7,3,4,6,3,3}) ≥ depth=3, so every sample
+    // survives. Each retained column sums to depth.
+    ASSERT(subsampled_n_samples(sub) == N_SAMP);
+    unsigned int n_sub_obs  = subsampled_n_obs(sub);
+    unsigned int n_sub_samp = subsampled_n_samples(sub);
+    double col_sums[6] = {0., 0., 0., 0., 0., 0.};
+    for (unsigned int i = 0; i < n_sub_obs; i++) {
+        const char* oid = subsampled_get_obs_id(sub, i);
+        ASSERT(oid != NULL);
+        double row[6] = {0., 0., 0., 0., 0., 0.};
+        ASSERT(subsampled_get_obs_data(sub, oid, row));
+        for (unsigned int j = 0; j < n_sub_samp; j++) col_sums[j] += row[j];
+    }
+    for (unsigned int j = 0; j < n_sub_samp; j++) {
+        ASSERT(fabs(col_sums[j] - (double) depth) < 1e-9);
+    }
+
+    // Out-of-range / unknown-id rejection.
+    ASSERT(subsampled_get_sample_id(sub, n_sub_samp) == NULL);
+    double junk[6] = {0., 0., 0., 0., 0., 0.};
+    ASSERT(!subsampled_get_obs_data(sub, "NOT_A_REAL_OTU", junk));
+
+    // Determinism: identical seed → identical cells.
+    ssu_set_random_seed(42);
+    opaque_biom_inmem_t* sub2 = NULL;
+    ASSERT(subsample_table_inmem(&table, depth, false, &sub2) == okay);
+    ASSERT(subsampled_n_obs(sub2) == n_sub_obs);
+    for (unsigned int i = 0; i < n_sub_obs; i++) {
+        const char* oid = subsampled_get_obs_id(sub, i);
+        double r1[6] = {0.}, r2[6] = {0.};
+        subsampled_get_obs_data(sub,  oid, r1);
+        subsampled_get_obs_data(sub2, oid, r2);
+        for (unsigned int j = 0; j < n_sub_samp; j++) ASSERT(r1[j] == r2[j]);
+    }
+
+    destroy_subsampled_inmem(&sub);
+    ASSERT(sub == NULL);
+    destroy_subsampled_inmem(&sub2);
+
+    SUITE_END();
+}
+
+void test_permanova_inmem() {
+    SUITE_START("test compute_permanova_inmem_fp64/fp32");
+
+    using namespace inmem_fixture;
+    const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                    INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+    // Unit branch lengths so unifrac produces a non-degenerate distance
+    // matrix; an all-zero-lengths tree drives PERMANOVA into a degenerate
+    // fstat regime.
+    const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+    mat_full_fp64_t* dm = NULL;
+    ComputeStatus rc = one_off_matrix_inmem_v2(&table, &tree, "unweighted_fp64",
+                                               false, 1.0, false, 1,
+                                               0, true, NULL, &dm);
+    ASSERT(rc == okay);
+    ASSERT(dm != NULL);
+
+    ssu_set_random_seed(42);
+    double fstat = 0.0, pvalue = 0.0;
+    rc = compute_permanova_inmem_fp64(dm->matrix, dm->n_samples, GROUPING,
+                                      999, &fstat, &pvalue);
+    ASSERT(rc == okay);
+    ASSERT(fstat > 0.0);
+    ASSERT(pvalue > 0.0 && pvalue <= 1.0);
+
+    // Re-seed and rerun. Under multi-threaded OMP the unpermuted F is
+    // computed via parallel reductions and can drift by ULPs across runs;
+    // the pvalue can shift correspondingly when the observed F sits near
+    // a permutation-tail boundary. Allow a tight numeric tolerance rather
+    // than requiring bit-exactness.
+    ssu_set_random_seed(42);
+    double fstat2 = 0.0, pvalue2 = 0.0;
+    compute_permanova_inmem_fp64(dm->matrix, dm->n_samples, GROUPING,
+                                 999, &fstat2, &pvalue2);
+    ASSERT(fabs(fstat2 - fstat) < 1e-6);
+    ASSERT(fabs(pvalue2 - pvalue) < 1e-2);
+
+    // Error paths.
+    ASSERT(compute_permanova_inmem_fp64(NULL, dm->n_samples, GROUPING, 9, &fstat, &pvalue) != okay);
+    ASSERT(compute_permanova_inmem_fp64(dm->matrix, dm->n_samples, NULL, 9, &fstat, &pvalue) != okay);
+
+    // fp32 variant: same matrix in fp32 layout.
+    mat_full_fp32_t* dm32 = NULL;
+    rc = one_off_matrix_inmem_fp32_v2(&table, &tree, "unweighted_fp32",
+                                      false, 1.0, false, 1,
+                                      0, true, NULL, &dm32);
+    ASSERT(rc == okay);
+    ssu_set_random_seed(42);
+    float fstat32 = 0.0f, pvalue32 = 0.0f;
+    rc = compute_permanova_inmem_fp32(dm32->matrix, dm32->n_samples, GROUPING,
+                                      999, &fstat32, &pvalue32);
+    ASSERT(rc == okay);
+    ASSERT(fstat32 > 0.0f);
+    ASSERT(pvalue32 > 0.0f && pvalue32 <= 1.0f);
+
+    destroy_mat_full_fp64(&dm);
+    destroy_mat_full_fp32(&dm32);
+
+    SUITE_END();
+}
+
 void test_faith_pd_shear(){
     SUITE_START("test faith PD extra OTUs in tree");
 
@@ -2289,6 +2464,9 @@ int main(int argc, char** argv) {
 
     test_faith_pd();
     test_faith_pd_shear();
+    test_faith_pd_inmem();
+    test_subsample_inmem();
+    test_permanova_inmem();
 
     printf("\n");
     printf(" %i / %i suites failed\n", suites_failed, suites_run);
