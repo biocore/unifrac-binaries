@@ -118,8 +118,13 @@ inmem_static: libssu_inmem.a
 # Install (archive + public headers under a stable prefix layout).
 # Embedders pick up libssu_inmem.a + the unifrac/ header tree via
 # vcpkg / CMake / pkg-config conventions.
+#
+# Guards against the empty-PREFIX footgun: the top-level Makefile
+# falls back to CONDA_PREFIX, but if both are unset `mkdir -p /lib`
+# would silently target the root filesystem.
 # --------------------------------------------------------------------------
 install_inmem: libssu_inmem.a
+	@test -n "$(PREFIX)" || { echo "ERROR: PREFIX is unset (and CONDA_PREFIX is unset). Pass PREFIX=/path or activate a conda env."; exit 1; }
 	mkdir -p ${PREFIX}/lib ${PREFIX}/include/unifrac
 	rm -f ${PREFIX}/lib/libssu_inmem.a; cp libssu_inmem.a ${PREFIX}/lib/
 	rm -f ${PREFIX}/include/unifrac/api.hpp; cp api.hpp ${PREFIX}/include/unifrac/
