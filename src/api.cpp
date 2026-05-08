@@ -916,11 +916,12 @@ compute_status faith_pd_inmem(const support_biom_t *table_data,
     return okay;
 }
 
-compute_status subsample_table_inmem(const support_biom_t *table_data,
-                                     unsigned int depth,
-                                     bool with_replacement,
-                                     opaque_biom_inmem_t **out) {
-    SETUP_TDBG("subsample_table_inmem")
+compute_status subsample_table_inmem_seeded(const support_biom_t *table_data,
+                                            unsigned int depth,
+                                            bool with_replacement,
+                                            int seed,
+                                            opaque_biom_inmem_t **out) {
+    SETUP_TDBG("subsample_table_inmem_seeded")
     if (table_data == NULL) return table_missing;
     if ((table_data->n_samples <= 0) || (table_data->n_obs <= 0)) {
         return table_empty;
@@ -935,24 +936,49 @@ compute_status subsample_table_inmem(const support_biom_t *table_data,
                          table_data->n_samples);
     TDBG_STEP("load_table")
 
-    // su::skbio_biom_subsampled draws from the global skbb-side mt19937
-    // (re-seedable via ssu_set_random_seed). Heap-allocate so it survives
-    // the function return as an opaque handle.
-    su::skbio_biom_subsampled *sub = new su::skbio_biom_subsampled(table, with_replacement, depth);
+    // seed >= 0: deterministic draw from the explicit seed.
+    // seed <  0: skbio_biom_subsampled draws from the global skbb-side
+    //            mt19937 (re-seedable via ssu_set_random_seed) — matches
+    //            the legacy non-seeded subsample_table_inmem behavior.
+    // Heap-allocate either way so the object survives the function
+    // return as an opaque handle. biom_inmem has a virtual destructor,
+    // so destroy_subsampled_inmem's `delete` chains correctly through
+    // either subclass.
+    su::biom_inmem *sub;
+    if (seed < 0) {
+        sub = new su::skbio_biom_subsampled(table, with_replacement, depth);
+    } else {
+        sub = new su::biom_subsampled(table, with_replacement, depth, (uint32_t) seed);
+    }
     *out = (opaque_biom_inmem_t*) sub;
     TDBG_STEP("subsample")
     return okay;
 }
 
+compute_status subsample_table_inmem(const support_biom_t *table_data,
+                                     unsigned int depth,
+                                     bool with_replacement,
+                                     opaque_biom_inmem_t **out) {
+    return subsample_table_inmem_seeded(table_data, depth, with_replacement, -1, out);
+}
+
+// The opaque handle returned by subsample_table_inmem* is a
+// su::biom_inmem* — the concrete type is either skbio_biom_subsampled
+// (global-RNG path) or biom_subsampled (explicit-seed path). All the
+// accessors below only depend on the biom_inmem interface, so the
+// casts target the common base. biom_inmem has a virtual destructor,
+// so destroy_subsampled_inmem's `delete` chains correctly through
+// either subclass.
+
 unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t) {
     if (t == NULL) return 0;
-    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const su::biom_inmem *sub = (const su::biom_inmem*) t;
     return sub->n_samples;
 }
 
 unsigned int subsampled_n_obs(const opaque_biom_inmem_t *t) {
     if (t == NULL) return 0;
-    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const su::biom_inmem *sub = (const su::biom_inmem*) t;
     return sub->n_obs;
 }
 
@@ -960,7 +986,7 @@ bool subsampled_get_obs_data(const opaque_biom_inmem_t *t,
                              const char *obs_id,
                              double *out) {
     if (t == NULL || obs_id == NULL || out == NULL) return false;
-    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const su::biom_inmem *sub = (const su::biom_inmem*) t;
     std::string id_str(obs_id);
     if (!sub->has_obs_id(id_str)) return false;
     sub->get_obs_data(id_str, out);
@@ -969,7 +995,7 @@ bool subsampled_get_obs_data(const opaque_biom_inmem_t *t,
 
 const char* subsampled_get_sample_id(const opaque_biom_inmem_t *t, unsigned int idx) {
     if (t == NULL) return NULL;
-    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const su::biom_inmem *sub = (const su::biom_inmem*) t;
     const std::vector<std::string> &ids = sub->get_sample_ids();
     if (idx >= ids.size()) return NULL;
     return ids[idx].c_str();
@@ -977,7 +1003,7 @@ const char* subsampled_get_sample_id(const opaque_biom_inmem_t *t, unsigned int 
 
 const char* subsampled_get_obs_id(const opaque_biom_inmem_t *t, unsigned int idx) {
     if (t == NULL) return NULL;
-    const su::skbio_biom_subsampled *sub = (const su::skbio_biom_subsampled*) t;
+    const su::biom_inmem *sub = (const su::biom_inmem*) t;
     const std::vector<std::string> &ids = sub->get_obs_ids();
     if (idx >= ids.size()) return NULL;
     return ids[idx].c_str();
@@ -985,7 +1011,7 @@ const char* subsampled_get_obs_id(const opaque_biom_inmem_t *t, unsigned int idx
 
 void destroy_subsampled_inmem(opaque_biom_inmem_t **t) {
     if (t == NULL || *t == NULL) return;
-    su::skbio_biom_subsampled *sub = (su::skbio_biom_subsampled*) (*t);
+    su::biom_inmem *sub = (su::biom_inmem*) (*t);
     *t = NULL;
     delete sub;
 }

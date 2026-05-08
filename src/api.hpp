@@ -235,6 +235,19 @@ EXTERN ComputeStatus subsample_table_inmem(const support_biom_t *table_data,
                                            bool with_replacement,
                                            opaque_biom_inmem_t **out);
 
+/* Per-call-seeded variant of subsample_table_inmem. Equivalent to the
+ * non-seeded form but accepts an explicit `seed`, sidestepping the
+ * global skbb RNG so concurrent multi-subsample workflows no longer
+ * need an external mutex. seed >= 0 produces a deterministic draw;
+ * seed < 0 falls back to the global RNG, making the non-seeded API
+ * equivalent to passing seed = -1.
+ */
+EXTERN ComputeStatus subsample_table_inmem_seeded(const support_biom_t *table_data,
+                                                  unsigned int depth,
+                                                  bool with_replacement,
+                                                  int seed,
+                                                  opaque_biom_inmem_t **out);
+
 EXTERN unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t);
 EXTERN unsigned int subsampled_n_obs(const opaque_biom_inmem_t *t);
 

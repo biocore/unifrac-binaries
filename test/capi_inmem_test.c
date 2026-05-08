@@ -275,6 +275,76 @@ void test_subsample_inmem_capi(void) {
     destroy_subsampled_inmem(&sub2);
 }
 
+static int subsample_data_equal(opaque_biom_inmem_t *a, opaque_biom_inmem_t *b) {
+    unsigned int n_obs_a = subsampled_n_obs(a);
+    unsigned int n_obs_b = subsampled_n_obs(b);
+    unsigned int n_samp_a = subsampled_n_samples(a);
+    unsigned int n_samp_b = subsampled_n_samples(b);
+    if (n_obs_a != n_obs_b || n_samp_a != n_samp_b) return 0;
+    double row_a[16] = {0.}, row_b[16] = {0.};
+    for (unsigned int i = 0; i < n_obs_a; i++) {
+        const char* oid = subsampled_get_obs_id(a, i);
+        if (!subsampled_get_obs_data(a, oid, row_a)) return 0;
+        if (!subsampled_get_obs_data(b, oid, row_b)) return 0;
+        for (unsigned int j = 0; j < n_samp_a; j++) {
+            if (row_a[j] != row_b[j]) return 0;
+        }
+    }
+    return 1;
+}
+
+void test_subsample_inmem_seeded_capi(void) {
+    const support_biom_t table = {(char**) obs_ids, (char**) samp_ids,
+                                  (uint32_t*) indices, (uint32_t*) indptr,
+                                  (double*) data, n_obs, n_samp, 0};
+    const unsigned int depth = 3;
+
+    // Same seed => byte-identical result, with no global-RNG dependency
+    // (deliberately scramble the global state between calls).
+    opaque_biom_inmem_t *a = NULL, *b = NULL;
+    ssu_set_random_seed(99);
+    err(subsample_table_inmem_seeded(&table, depth, false, 7, &a) != okay,
+        "subsample_table_inmem_seeded(7) failed");
+    ssu_set_random_seed(123); // unrelated to the seeded call
+    err(subsample_table_inmem_seeded(&table, depth, false, 7, &b) != okay,
+        "subsample_table_inmem_seeded(7) failed (second call)");
+    err(!subsample_data_equal(a, b),
+        "seeded subsample with same seed must be byte-identical regardless of global RNG state");
+
+    // Different seeds should produce a different draw for at least one
+    // of a small set of seed pairs. For very small fixtures (this test
+    // uses depth=3 across 6 samples) the per-pair collision rate can be
+    // non-trivial, so we don't require any specific pair to differ —
+    // only that the seed actually influences the draw somewhere.
+    int saw_difference = 0;
+    opaque_biom_inmem_t *c = NULL;
+    int alt_seeds[] = {8, 17, 31, 100, 12345};
+    for (size_t i = 0; i < sizeof(alt_seeds)/sizeof(alt_seeds[0]); i++) {
+        err(subsample_table_inmem_seeded(&table, depth, false, alt_seeds[i], &c) != okay,
+            "subsample_table_inmem_seeded(alt) failed");
+        if (!subsample_data_equal(a, c)) saw_difference = 1;
+        destroy_subsampled_inmem(&c);
+    }
+    err(!saw_difference,
+        "seeded subsample is ignoring the seed: all 5 alt seeds matched seed=7");
+
+    // seed = -1 => global-RNG fallback equivalent to subsample_table_inmem.
+    opaque_biom_inmem_t *d = NULL, *e = NULL;
+    ssu_set_random_seed(42);
+    err(subsample_table_inmem_seeded(&table, depth, false, -1, &d) != okay,
+        "subsample_table_inmem_seeded(-1) failed");
+    ssu_set_random_seed(42);
+    err(subsample_table_inmem(&table, depth, false, &e) != okay,
+        "subsample_table_inmem failed");
+    err(!subsample_data_equal(d, e),
+        "subsample_table_inmem_seeded(seed=-1) must match subsample_table_inmem");
+
+    destroy_subsampled_inmem(&a);
+    destroy_subsampled_inmem(&b);
+    destroy_subsampled_inmem(&d);
+    destroy_subsampled_inmem(&e);
+}
+
 void test_permanova_inmem_capi(int num_cores) {
     // Build a real (non-degenerate) unweighted UniFrac matrix to feed into
     // PERMANOVA. The shared `lengths[]` is all-zero, which would yield an
@@ -348,6 +418,8 @@ int main(int argc, char** argv) {
     test_faith_pd_inmem_capi();
     printf("Testing subsample_table_inmem + accessors...\n");
     test_subsample_inmem_capi();
+    printf("Testing subsample_table_inmem_seeded...\n");
+    test_subsample_inmem_seeded_capi();
     printf("Testing compute_permanova_inmem_fp64/fp32...\n");
     test_permanova_inmem_capi(num_cores);
     printf("Tests passed.\n");

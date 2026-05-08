@@ -305,6 +305,7 @@ ComputeStatus faith_pd_inmem(const support_biom_t *table_data,
 /*********************************************************************/
 
 static ComputeStatus (*dl_subsample_table_inmem)(const support_biom_t*, unsigned int, bool, opaque_biom_inmem_t**) = NULL;
+static ComputeStatus (*dl_subsample_table_inmem_seeded)(const support_biom_t*, unsigned int, bool, int, opaque_biom_inmem_t**) = NULL;
 static unsigned int (*dl_subsampled_n_samples)(const opaque_biom_inmem_t*) = NULL;
 static unsigned int (*dl_subsampled_n_obs)(const opaque_biom_inmem_t*) = NULL;
 static bool (*dl_subsampled_get_obs_data)(const opaque_biom_inmem_t*, const char*, double*) = NULL;
@@ -318,6 +319,15 @@ ComputeStatus subsample_table_inmem(const support_biom_t *table_data,
    cond_ssu_load("subsample_table_inmem", (void **) &dl_subsample_table_inmem);
 
    return (*dl_subsample_table_inmem)(table_data, depth, with_replacement, out);
+}
+
+ComputeStatus subsample_table_inmem_seeded(const support_biom_t *table_data,
+                                           unsigned int depth, bool with_replacement,
+                                           int seed,
+                                           opaque_biom_inmem_t **out) {
+   cond_ssu_load("subsample_table_inmem_seeded", (void **) &dl_subsample_table_inmem_seeded);
+
+   return (*dl_subsample_table_inmem_seeded)(table_data, depth, with_replacement, seed, out);
 }
 
 unsigned int subsampled_n_samples(const opaque_biom_inmem_t *t) {
