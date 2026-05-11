@@ -5,6 +5,12 @@
 #   make wasm SKBB_DIR=/path/to/scikit-bio-binaries
 include wasm/emscripten_build.mk
 
+# Native in-memory static-archive build rules. Defines `inmem_static`,
+# `install_inmem`, `inmem_clean` PHONY targets plus per-TU `.inmem.o`
+# and `libssu_inmem.a` rules. Top-level invocation:
+#   make inmem_static SKBB_DIR=/path/to/scikit-bio-binaries
+include inmem_build.mk
+
 PLATFORM := $(shell uname -s)
 COMPILER := $(shell (h5c++ -v 2>&1) | tr A-Z a-z )
 

@@ -35,6 +35,7 @@
 *.wasm
 .wasm-cache/
 src/.wasm-skbb-include/
+src/.inmem-skbb-include/
 src/test_*_wasm.js
 
 # Python bytecode from src/generate_*.py invocations
