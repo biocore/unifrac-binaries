@@ -233,8 +233,10 @@ def print_body(method,lines,nmspace):
                 break # found end of args, exit the loop
             line = lines[i]
             i+=1
-        
-        for ft in ftypes:
+
+        # make sure we create always the same output, sort
+        sorted_ftypes = sorted(ftypes)
+        for ft in sorted_ftypes:
             print_func_args(method,ftype,nmspace,fname,ft,fargs)
             print('');
 
