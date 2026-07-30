@@ -456,6 +456,45 @@ void destroy_partial_dyn_mat(partial_dyn_mat_t** result) {
 }
 
 
+/* A stripe_stop that does not make sense means "through the last stripe".
+ * set_tasks applies that default internally, and callers need the same answer to
+ * work out how many stripes their tasks are going to divide, so the rule lives
+ * in exactly one place.
+ */
+static unsigned int effective_stripe_stop(unsigned int n_samples,
+                                          unsigned int stripe_start,
+                                          unsigned int stripe_stop) {
+    return (stripe_stop <= stripe_start) ? ((n_samples + 1) / 2) : stripe_stop;
+}
+
+/* Force a caller-supplied n_substeps into the range set_tasks can actually
+ * divide the stripes into. n_substeps only says how to split that range across
+ * tasks, so out-of-range values are a request to be normalized rather than an
+ * error:
+ *
+ *   0                        divides by zero in set_tasks below
+ *   > n_stripes_in_range     leaves trailing tasks with an empty stripe range
+ *                            whose start indexes one past the end of dm_stripes
+ *                            (dereferenced unconditionally in
+ *                            UnifracTaskVector, unifrac_task.hpp)
+ *
+ * n_stripes_in_range is stripe_stop - stripe_start, the number of stripes these
+ * tasks will divide -- NOT the size of dm_stripes. The two differ for partial
+ * computes, which allocate the full stripe vector but compute a sub-range.
+ *
+ * Must be called before sizing the tasks vector, since that is sized by the
+ * returned value.
+ */
+static unsigned int clamp_substeps(unsigned int n_substeps, unsigned int n_stripes_in_range) {
+    if (n_stripes_in_range < 1) n_stripes_in_range = 1;  // an empty table is rejected upstream
+    if (n_substeps > n_stripes_in_range) {
+        fprintf(stderr, "More substeps were requested than stripes. Using %u substeps.\n", n_stripes_in_range);
+        return n_stripes_in_range;
+    }
+    if (n_substeps < 1) return 1;
+    return n_substeps;
+}
+
 void set_tasks(std::vector<su::task_parameters> &tasks,
                double alpha,
                unsigned int n_samples,
@@ -466,8 +505,7 @@ void set_tasks(std::vector<su::task_parameters> &tasks,
                unsigned int n_tasks) {
 
     // compute from start to the max possible stripe if stop doesn't make sense
-    if(stripe_stop <= stripe_start)
-        stripe_stop = (n_samples + 1) / 2;
+    stripe_stop = effective_stripe_stop(n_samples, stripe_start, stripe_stop);
 
     /* chunking strategy is to balance as much as possible. eg if there are 15 stripes
      * and 4 threads, our goal is to assign 4 stripes to 3 threads, and 3 stripes to one thread.
@@ -514,10 +552,8 @@ compute_status one_off_inmem_cpp(su::biom_interface &table, const su::BPTree &tr
     std::vector<double*> dm_stripes(stripe_stop);
     std::vector<double*> dm_stripes_total(stripe_stop);
 
-    if(n_substeps > dm_stripes.size()) {
-        fprintf(stderr, "More substeps were requested than stripes. Using %zd substeps.\n", long(dm_stripes.size()));
-        n_substeps = dm_stripes.size();
-    }
+    // whole range, so stripe_start is 0
+    n_substeps = clamp_substeps(n_substeps, stripe_stop);
 
     std::vector<su::task_parameters> tasks(n_substeps);
 
@@ -556,10 +592,11 @@ compute_status partial_v3(const char* biom_filename, const char* tree_filename,
     std::vector<double*> dm_stripes((table.n_samples + 1) / 2);
     std::vector<double*> dm_stripes_total((table.n_samples + 1) / 2);
 
-    if(n_substeps > dm_stripes.size()) {
-        fprintf(stderr, "More substeps were requested than stripes. Using %zd substeps.\n", long(dm_stripes.size()));
-        n_substeps = dm_stripes.size();
-    }
+    /* dm_stripes covers every stripe, but the tasks only divide the requested
+     * sub-range, so that -- not dm_stripes.size() -- is what bounds n_substeps.
+     */
+    n_substeps = clamp_substeps(n_substeps,
+                                effective_stripe_stop(table.n_samples, stripe_start, stripe_stop) - stripe_start);
 
     std::vector<su::task_parameters> tasks(n_substeps);
 
@@ -676,6 +713,9 @@ compute_status one_off_matrix_T(su::biom_interface &table, const su::BPTree &tre
     {
       std::vector<double*> dm_stripes(stripe_stop);
       std::vector<double*> dm_stripes_total(stripe_stop);
+
+      // whole range, so stripe_start is 0
+      n_substeps = clamp_substeps(n_substeps, stripe_stop);
 
       std::vector<su::task_parameters> tasks(n_substeps);
 

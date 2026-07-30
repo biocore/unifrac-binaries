@@ -1833,6 +1833,102 @@ void test_permanova_inmem() {
     SUITE_END();
 }
 
+/* n_substeps arrives straight from the caller and only says how to split the
+ * stripe range across tasks, so every value must produce the same matrix rather
+ * than a crash. The 6-sample fixture has (6 + 1) / 2 = 3 stripes, so the cases
+ * below cover fewer substeps than stripes, exactly as many, more, and zero.
+ */
+void test_matrix_inmem_substeps() {
+    SUITE_START("test one_off_matrix_inmem_fp32 substep bounds");
+
+    using namespace inmem_fixture;
+    const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                    INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+    const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+    // n_substeps == 1 comes first and establishes the expected matrix
+    const unsigned int cases[] = {1, 2, 3, 4, 8, 64, 0};
+    const unsigned int n_cases = sizeof(cases) / sizeof(cases[0]);
+
+    std::vector<float> reference;
+    for (unsigned int c = 0; c < n_cases; c++) {
+        mat_full_fp32_t* mat = NULL;
+        ASSERT(one_off_matrix_inmem_fp32_v3(&table, &tree, "unweighted_fp32",
+                                            false, 1.0, false, true,
+                                            cases[c],   // n_substeps
+                                            0, false, NULL, &mat) == okay);
+        ASSERT(mat != NULL);
+        ASSERT(mat->n_samples == N_SAMP);
+        const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
+        if (reference.empty()) {
+            reference.assign(mat->matrix, mat->matrix + n_els);
+        } else {
+            // splitting the same stripes over more tasks changes nothing about
+            // the arithmetic within a stripe, so this is exact
+            ASSERT(n_els == reference.size());
+            bool identical = true;
+            for (size_t j = 0; j < n_els; j++)
+                if (mat->matrix[j] != reference[j]) identical = false;
+            ASSERT(identical);
+        }
+        destroy_mat_full_fp32(&mat);
+    }
+
+    SUITE_END();
+}
+
+/* Same bounds question for partial_v3, which differs from the one_off entries in
+ * a way that matters: it sizes dm_stripes to the *total* stripe count while
+ * asking set_tasks to divide only the caller's sub-range. So the number of
+ * stripes the tasks actually divide is stripe_stop - stripe_start, and a
+ * sub-range that does not start at stripe 0 is the case where clamping against
+ * the total instead of the sub-range still handed a trailing task a start index
+ * one past the end of dm_stripes.
+ *
+ * test.biom has 6 samples, so (6 + 1) / 2 = 3 stripes total and a sub-range of
+ * 2 here. Note the overflow this pins is an out-of-bounds *read* of a pointer
+ * that an empty stripe range never dereferences, so it needs a sanitizer to be
+ * seen -- this test passing is necessary but not sufficient.
+ */
+void test_partial_substeps() {
+    SUITE_START("test partial_v3 substep bounds");
+
+    const unsigned int stripe_start = 1;
+    const unsigned int stripe_stop  = 3;
+    const unsigned int cases[] = {1, 2, 3, 8, 0};
+    const unsigned int n_cases = sizeof(cases) / sizeof(cases[0]);
+
+    std::vector<std::vector<double> > reference;
+    for (unsigned int c = 0; c < n_cases; c++) {
+        partial_mat_t* pm = NULL;
+        ASSERT(partial_v3("test.biom", "test.tre", "unweighted",
+                          false, 1.0, false, true,
+                          cases[c],                    // n_substeps
+                          stripe_start, stripe_stop, &pm) == okay);
+        ASSERT(pm != NULL);
+        ASSERT(pm->stripe_start == stripe_start);
+        ASSERT(pm->stripe_stop == stripe_stop);
+
+        std::vector<std::vector<double> > got;
+        for (unsigned int s = 0; s < stripe_stop - stripe_start; s++)
+            got.push_back(std::vector<double>(pm->stripes[s],
+                                              pm->stripes[s] + pm->n_samples));
+
+        if (reference.empty()) {
+            reference = got;
+        } else {
+            ASSERT(got.size() == reference.size());
+            bool identical = (got.size() == reference.size());
+            for (unsigned int s = 0; identical && s < got.size(); s++)
+                identical = (got[s] == reference[s]);
+            ASSERT(identical);
+        }
+        destroy_partial_mat(&pm);
+    }
+
+    SUITE_END();
+}
+
 /* Concurrency: several computes in flight in one process must not corrupt
  * shared library state, and each must return the same answer it would have
  * returned on its own.
@@ -2659,6 +2755,8 @@ int main(int argc, char** argv) {
     test_faith_pd_inmem();
     test_subsample_inmem();
     test_permanova_inmem();
+    test_matrix_inmem_substeps();
+    test_partial_substeps();
     test_concurrent_matrix_inmem();
     test_concurrent_faith_pd_inmem();
     // must stay last; see the comment on the function
