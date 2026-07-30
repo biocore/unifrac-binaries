@@ -95,6 +95,17 @@ ComputeStatus one_off_matrix_fp32(const char* biom_filename, const char* tree_fi
 }
 #endif // UNIFRAC_WASM (file-based v2 compat wrappers)
 
+/* v3 predates the per-call subsample seed, so it takes the global-RNG path
+ * (seed < 0), which is what it has always done.
+ */
+ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                       const char* unifrac_method, bool variance_adjust, double alpha,
+                                       bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                       unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                       mat_full_fp64_t** result) {
+    return one_off_matrix_inmem_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
+}
+
 ComputeStatus one_off_matrix_inmem_v2(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                        const char* unifrac_method, bool variance_adjust, double alpha,
                                        bool bypass_tips, unsigned int n_substeps,
@@ -111,6 +122,15 @@ ComputeStatus one_off_inmem(const support_biom_t *table_data, const support_bptr
     return one_off_matrix_inmem_v2(table_data, tree_data, unifrac_method, variance_adjust, alpha, bypass_tips, nthreads,
                                    0, true,  NULL,
                                    result);
+}
+
+/* see the note on one_off_matrix_inmem_v3 above */
+ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                            const char* unifrac_method, bool variance_adjust, double alpha,
+                                            bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                            unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                            mat_full_fp32_t** result) {
+    return one_off_matrix_inmem_fp32_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 
 ComputeStatus one_off_matrix_inmem_fp32_v2(const support_biom_t *table_data, const support_bptree_t *tree_data,

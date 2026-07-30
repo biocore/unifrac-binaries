@@ -8,6 +8,7 @@
 #include "skbio_alt.hpp"
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <thread>
 #include <cstring>
 #include <stdlib.h> 
@@ -757,19 +758,34 @@ compute_status one_off_matrix_T(su::biom_interface &table, const su::BPTree &tre
 
 
 template<class TReal, class TMat>
-compute_status one_off_matrix_v3_T(su::biom_inmem &table, const su::BPTree &tree,
+compute_status one_off_matrix_v4_T(su::biom_inmem &table, const su::BPTree &tree,
                                    const char* unifrac_method, bool variance_adjust, double alpha,
                                    bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                   unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                   unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                   const char *mmap_dir,
                                    TMat** result) {
-    SETUP_TDBG("one_off_matrix_inmem_v3")
+    SETUP_TDBG("one_off_matrix_inmem_v4")
     if (subsample_depth>0) {
-        su::skbio_biom_subsampled table_subsampled(table, subsample_with_replacement, subsample_depth);
-        if ((table_subsampled.n_samples==0) || (table_subsampled.n_obs==0)) {
+        /* Same seeding rule as subsample_table_inmem_seeded():
+         *   seed >= 0  deterministic draw from the explicit seed, touching no
+         *              shared state, so concurrent callers do not need a lock
+         *   seed <  0  skbio_biom_subsampled draws from the process-global
+         *              mt19937 that ssu_set_random_seed() sets, which is the
+         *              legacy behaviour
+         * The two branches differ in type, so hold the result by base pointer;
+         * one_off_matrix_T takes a biom_interface&.
+         */
+        std::unique_ptr<su::biom_inmem> table_subsampled;
+        if (seed < 0) {
+            table_subsampled.reset(new su::skbio_biom_subsampled(table, subsample_with_replacement, subsample_depth));
+        } else {
+            table_subsampled.reset(new su::biom_subsampled(table, subsample_with_replacement, subsample_depth, (uint32_t) seed));
+        }
+        if ((table_subsampled->n_samples==0) || (table_subsampled->n_obs==0)) {
            return table_empty;
         }
         TDBG_STEP("subsample")
-        return one_off_matrix_T<TReal,TMat>(table_subsampled,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,mmap_dir,result);
+        return one_off_matrix_T<TReal,TMat>(*table_subsampled,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,mmap_dir,result);
     } else {
         return one_off_matrix_T<TReal,TMat>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,mmap_dir,result);
     }
@@ -786,7 +802,7 @@ compute_status one_off_matrix_v3(const char* biom_filename, const char* tree_fil
     CHECK_FILE(tree_filename, tree_missing)
     PARSE_TREE_TABLE(tree_filename, biom_filename)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 
 compute_status one_off_matrix_fp32_v3(const char* biom_filename, const char* tree_filename,
@@ -799,7 +815,7 @@ compute_status one_off_matrix_fp32_v3(const char* biom_filename, const char* tre
     CHECK_FILE(tree_filename, tree_missing)
     PARSE_TREE_TABLE(tree_filename, biom_filename)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 
 /* As above, but from a pre-loaded tree object */
@@ -815,7 +831,7 @@ compute_status one_off_matrix_v3t(const char* biom_filename, const opaque_bptree
     su::biom table(biom_filename);
     VALIDATE_TREE_TABLE(tree, table)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 
 compute_status one_off_matrix_fp32_v3t(const char* biom_filename, const opaque_bptree_t* tree_data,
@@ -830,14 +846,15 @@ compute_status one_off_matrix_fp32_v3t(const char* biom_filename, const opaque_b
     su::biom table(biom_filename);
     VALIDATE_TREE_TABLE(tree, table)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 #endif // UNIFRAC_WASM (file-based one_off_matrix wrappers)
 
-compute_status one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+compute_status one_off_matrix_inmem_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                        const char* unifrac_method, bool variance_adjust, double alpha,
                                        bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                       unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                       unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                       const char *mmap_dir,
                                        mat_full_fp64_t** result) {
     SETUP_TDBG("one_off_matrix_inmem")
     bool fp64;
@@ -870,13 +887,14 @@ compute_status one_off_matrix_inmem_v3(const support_biom_t *table_data, const s
 
     VALIDATE_TREE_TABLE(tree,table)
 
-    return one_off_matrix_v3_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,seed,mmap_dir,result);
 }
 
-compute_status one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+compute_status one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                             const char* unifrac_method, bool variance_adjust, double alpha,
                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                            unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                            unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                            const char *mmap_dir,
                                             mat_full_fp32_t** result) {
     SETUP_TDBG("one_off_matrix_inmem_fp32")
     bool fp64;
@@ -909,7 +927,7 @@ compute_status one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, co
 
     VALIDATE_TREE_TABLE(tree,table)
 
-    return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,seed,mmap_dir,result);
 }
 
 compute_status faith_pd_inmem(const support_biom_t *table_data,

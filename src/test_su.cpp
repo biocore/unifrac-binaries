@@ -1984,6 +1984,48 @@ namespace concurrency_fixture {
         }
     }
 
+    /* Subsampled compute with an explicit per-call seed. Every sample in the
+     * fixture has a total count >= SUBSAMPLE_DEPTH, so none are dropped and the
+     * matrix keeps its full size.
+     */
+    static const unsigned int SUBSAMPLE_DEPTH = 3;
+    static const int          SUBSAMPLE_SEED  = 42;
+
+    static void seeded_matrix_worker(unsigned int iters,
+                                     const std::vector<float>* reference,
+                                     outcome* out) {
+        using namespace inmem_fixture;
+        const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                        INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+        const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+        for (unsigned int i = 0; i < iters; i++) {
+            mat_full_fp32_t* mat = NULL;
+            ComputeStatus rc = one_off_matrix_inmem_fp32_v4(&table, &tree, "unweighted_fp32",
+                                                            false, 1.0, false, true, 1,
+                                                            SUBSAMPLE_DEPTH, false,
+                                                            SUBSAMPLE_SEED,
+                                                            NULL, &mat);
+            if (rc != okay) {
+                out->n_status++;
+                continue;
+            }
+            const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
+            if (n_els != reference->size()) {
+                out->n_mismatch++;
+            } else {
+                for (size_t j = 0; j < n_els; j++) {
+                    if (mat->matrix[j] != (*reference)[j]) {
+                        out->n_mismatch++;
+                        break;
+                    }
+                }
+            }
+            destroy_mat_full_fp32(&mat);
+            out->n_ok++;
+        }
+    }
+
     static void faith_pd_worker(unsigned int iters, outcome* out) {
         using namespace inmem_fixture;
         const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
@@ -2075,6 +2117,110 @@ void test_concurrent_faith_pd_inmem() {
         workers[t].join();
 
     check(results, N_ITERS);
+
+    SUITE_END();
+}
+
+/* A subsampled compute draws from an RNG. Passing the seed per call is what
+ * makes a reproducible subsampled compute possible without holding a lock
+ * across seed-then-compute: the alternative, ssu_set_random_seed() followed by a
+ * v3 call, mutates a process-global generator, so concurrent callers interleave
+ * their seeding and neither gets the answer it asked for.
+ *
+ * Bit-exactness here relies on every call seeing the same OpenMP width, since
+ * the subsample draw is distributed across the OpenMP team. That holds within
+ * one process: nthreads-var is a per-thread ICV and no one changes it, so the
+ * plain std::threads below each get a team of the same size. It is NOT a claim
+ * that a subsampled result is reproducible across different thread counts.
+ */
+void test_concurrent_matrix_inmem_seeded() {
+    SUITE_START("test concurrent seeded one_off_matrix_inmem_fp32_v4");
+
+    using namespace inmem_fixture;
+    using namespace concurrency_fixture;
+
+    const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                    INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+    const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+    // serial reference at the same seed
+    std::vector<float> reference;
+    {
+        mat_full_fp32_t* mat = NULL;
+        ASSERT(one_off_matrix_inmem_fp32_v4(&table, &tree, "unweighted_fp32",
+                                            false, 1.0, false, true, 1,
+                                            SUBSAMPLE_DEPTH, false, SUBSAMPLE_SEED,
+                                            NULL, &mat) == okay);
+        ASSERT(mat != NULL);
+        ASSERT(mat->n_samples == N_SAMP);
+        const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
+        reference.assign(mat->matrix, mat->matrix + n_els);
+        destroy_mat_full_fp32(&mat);
+    }
+
+    std::vector<outcome> results(N_THREADS);
+    std::vector<std::thread> workers;
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers.emplace_back(seeded_matrix_worker, N_ITERS, &reference, &results[t]);
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers[t].join();
+
+    check(results, N_ITERS);
+
+    SUITE_END();
+}
+
+/* v4 seeding semantics, serially: an explicit seed is reproducible, and a
+ * negative seed keeps the legacy behaviour of drawing from the process-global
+ * generator that ssu_set_random_seed() sets.
+ */
+void test_matrix_inmem_seeded() {
+    SUITE_START("test one_off_matrix_inmem_fp32_v4 seeding");
+
+    using namespace inmem_fixture;
+    using namespace concurrency_fixture;
+
+    const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                    INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+    const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+    // collect one matrix, whichever entry point / seed is asked for
+    struct local {
+        static std::vector<float> run(const support_biom_t* tbl, const support_bptree_t* tre,
+                                      bool use_v4, int seed) {
+            mat_full_fp32_t* mat = NULL;
+            ComputeStatus rc = use_v4
+                ? one_off_matrix_inmem_fp32_v4(tbl, tre, "unweighted_fp32", false, 1.0,
+                                               false, true, 1, SUBSAMPLE_DEPTH, false,
+                                               seed, NULL, &mat)
+                : one_off_matrix_inmem_fp32_v3(tbl, tre, "unweighted_fp32", false, 1.0,
+                                               false, true, 1, SUBSAMPLE_DEPTH, false,
+                                               NULL, &mat);
+            ASSERT(rc == okay);
+            ASSERT(mat != NULL);
+            const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
+            std::vector<float> out(mat->matrix, mat->matrix + n_els);
+            destroy_mat_full_fp32(&mat);
+            return out;
+        }
+    };
+
+    // an explicit seed reproduces, with no seeding call in between
+    std::vector<float> a = local::run(&table, &tree, true, 7);
+    std::vector<float> b = local::run(&table, &tree, true, 7);
+    ASSERT(a == b);
+
+    // ... and does not depend on the global generator's state
+    ssu_set_random_seed(999);
+    std::vector<float> c = local::run(&table, &tree, true, 7);
+    ASSERT(a == c);
+
+    // a negative seed is the legacy path: same global seed, same answer as v3
+    ssu_set_random_seed(SUBSAMPLE_SEED);
+    std::vector<float> v3 = local::run(&table, &tree, false, 0 /* unused */);
+    ssu_set_random_seed(SUBSAMPLE_SEED);
+    std::vector<float> v4_neg = local::run(&table, &tree, true, -1);
+    ASSERT(v3 == v4_neg);
 
     SUITE_END();
 }
@@ -2757,7 +2903,9 @@ int main(int argc, char** argv) {
     test_permanova_inmem();
     test_matrix_inmem_substeps();
     test_partial_substeps();
+    test_matrix_inmem_seeded();
     test_concurrent_matrix_inmem();
+    test_concurrent_matrix_inmem_seeded();
     test_concurrent_faith_pd_inmem();
     // must stay last; see the comment on the function
     test_concurrent_matrix_inmem_reporting();
