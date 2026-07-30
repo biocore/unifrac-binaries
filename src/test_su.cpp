@@ -1,5 +1,8 @@
 #include "api.hpp"
 
+#include <thread>
+#include <vector>
+
 #ifndef API_ONLY
 #include "tree.hpp"
 #include "biom.hpp"
@@ -1829,6 +1832,151 @@ void test_permanova_inmem() {
     SUITE_END();
 }
 
+/* Concurrency: several computes in flight in one process must not corrupt
+ * shared library state, and each must return the same answer it would have
+ * returned on its own.
+ *
+ * The ASSERT macros mutate non-atomic harness counters, so worker threads
+ * never assert; each records into its own slot and the main thread checks
+ * every slot after joining.
+ */
+namespace concurrency_fixture {
+    static const unsigned int N_THREADS = 4;
+    static const unsigned int N_ITERS   = 25;
+
+    struct outcome {
+        unsigned int n_ok       = 0;  // computes that returned okay
+        unsigned int n_status   = 0;  // computes that returned something else
+        unsigned int n_mismatch = 0;  // computes that disagreed with the reference
+    };
+
+    // The unweighted compute is deterministic, so a concurrent result must be
+    // bit-identical to the serial one -- no tolerance needed.
+    static void matrix_worker(unsigned int iters,
+                              const std::vector<float>* reference,
+                              outcome* out) {
+        using namespace inmem_fixture;
+        const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                        INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+        const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+        for (unsigned int i = 0; i < iters; i++) {
+            mat_full_fp32_t* mat = NULL;
+            ComputeStatus rc = one_off_matrix_inmem_fp32_v3(&table, &tree, "unweighted_fp32",
+                                                            false, 1.0, false, true,
+                                                            1,           // n_substeps
+                                                            0, false,    // no subsampling
+                                                            NULL, &mat);
+            if (rc != okay) {
+                out->n_status++;
+                continue;
+            }
+            const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
+            if (n_els != reference->size()) {
+                out->n_mismatch++;
+            } else {
+                for (size_t j = 0; j < n_els; j++) {
+                    if (mat->matrix[j] != (*reference)[j]) {
+                        out->n_mismatch++;
+                        break;
+                    }
+                }
+            }
+            destroy_mat_full_fp32(&mat);
+            out->n_ok++;
+        }
+    }
+
+    static void faith_pd_worker(unsigned int iters, outcome* out) {
+        using namespace inmem_fixture;
+        const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                        INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+        const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+        // same expectation as test_faith_pd_inmem
+        const double expected[6] = {4., 5., 6., 3., 2., 5.};
+
+        for (unsigned int i = 0; i < iters; i++) {
+            r_vec* res = NULL;
+            if (faith_pd_inmem(&table, &tree, &res) != okay) {
+                out->n_status++;
+                continue;
+            }
+            if (res->n_samples != N_SAMP) {
+                out->n_mismatch++;
+            } else {
+                for (unsigned int j = 0; j < N_SAMP; j++) {
+                    if (fabs(res->values[j] - expected[j]) > 1e-6) {
+                        out->n_mismatch++;
+                        break;
+                    }
+                }
+            }
+            destroy_results_vec(&res);
+            out->n_ok++;
+        }
+    }
+
+    static void check(const std::vector<outcome> &results, unsigned int iters) {
+        for (unsigned int t = 0; t < results.size(); t++) {
+            ASSERT(results[t].n_status == 0);
+            ASSERT(results[t].n_mismatch == 0);
+            ASSERT(results[t].n_ok == iters);
+        }
+    }
+}
+
+void test_concurrent_matrix_inmem() {
+    SUITE_START("test concurrent one_off_matrix_inmem_fp32");
+
+    using namespace inmem_fixture;
+    using namespace concurrency_fixture;
+
+    // Serial reference first, so the expected answer is known-good.
+    std::vector<float> reference;
+    {
+        const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                        INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+        const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+        mat_full_fp32_t* mat = NULL;
+        ASSERT(one_off_matrix_inmem_fp32_v3(&table, &tree, "unweighted_fp32",
+                                            false, 1.0, false, true, 1, 0, false,
+                                            NULL, &mat) == okay);
+        ASSERT(mat != NULL);
+        ASSERT(mat->n_samples == N_SAMP);
+        const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
+        reference.assign(mat->matrix, mat->matrix + n_els);
+        destroy_mat_full_fp32(&mat);
+    }
+
+    std::vector<outcome> results(N_THREADS);
+    std::vector<std::thread> workers;
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers.emplace_back(matrix_worker, N_ITERS, &reference, &results[t]);
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers[t].join();
+
+    check(results, N_ITERS);
+
+    SUITE_END();
+}
+
+void test_concurrent_faith_pd_inmem() {
+    SUITE_START("test concurrent faith_pd_inmem");
+
+    using namespace concurrency_fixture;
+
+    std::vector<outcome> results(N_THREADS);
+    std::vector<std::thread> workers;
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers.emplace_back(faith_pd_worker, N_ITERS, &results[t]);
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers[t].join();
+
+    check(results, N_ITERS);
+
+    SUITE_END();
+}
+
 void test_faith_pd_shear(){
     SUITE_START("test faith PD extra OTUs in tree");
 
@@ -2467,6 +2615,8 @@ int main(int argc, char** argv) {
     test_faith_pd_inmem();
     test_subsample_inmem();
     test_permanova_inmem();
+    test_concurrent_matrix_inmem();
+    test_concurrent_faith_pd_inmem();
 
     printf("\n");
     printf(" %i / %i suites failed\n", suites_failed, suites_run);
