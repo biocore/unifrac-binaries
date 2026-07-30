@@ -1,5 +1,6 @@
 #include "api.hpp"
 
+#include <signal.h>
 #include <thread>
 #include <vector>
 
@@ -1916,24 +1917,11 @@ namespace concurrency_fixture {
         }
     }
 
-    static void check(const std::vector<outcome> &results, unsigned int iters) {
-        for (unsigned int t = 0; t < results.size(); t++) {
-            ASSERT(results[t].n_status == 0);
-            ASSERT(results[t].n_mismatch == 0);
-            ASSERT(results[t].n_ok == iters);
-        }
-    }
-}
-
-void test_concurrent_matrix_inmem() {
-    SUITE_START("test concurrent one_off_matrix_inmem_fp32");
-
-    using namespace inmem_fixture;
-    using namespace concurrency_fixture;
-
-    // Serial reference first, so the expected answer is known-good.
-    std::vector<float> reference;
-    {
+    /* Serial compute: both the expected answer and the thing that installs the
+     * SIGUSR1 handler, since su::process_stripes registers it.
+     */
+    static void serial_reference(std::vector<float> &reference) {
+        using namespace inmem_fixture;
         const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
                                         INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
         const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
@@ -1947,6 +1935,24 @@ void test_concurrent_matrix_inmem() {
         reference.assign(mat->matrix, mat->matrix + n_els);
         destroy_mat_full_fp32(&mat);
     }
+
+    static void check(const std::vector<outcome> &results, unsigned int iters) {
+        for (unsigned int t = 0; t < results.size(); t++) {
+            ASSERT(results[t].n_status == 0);
+            ASSERT(results[t].n_mismatch == 0);
+            ASSERT(results[t].n_ok == iters);
+        }
+    }
+}
+
+void test_concurrent_matrix_inmem() {
+    SUITE_START("test concurrent one_off_matrix_inmem_fp32");
+
+    using namespace concurrency_fixture;
+
+    // Serial reference first, so the expected answer is known-good.
+    std::vector<float> reference;
+    serial_reference(reference);
 
     std::vector<outcome> results(N_THREADS);
     std::vector<std::thread> workers;
@@ -1972,6 +1978,44 @@ void test_concurrent_faith_pd_inmem() {
     for (unsigned int t = 0; t < N_THREADS; t++)
         workers[t].join();
 
+    check(results, N_ITERS);
+
+    SUITE_END();
+}
+
+/* The progress-reporting path itself, under concurrency: SIGUSR1 sets every
+ * flag, and each in-flight compute clears and reports its own via sync_printf.
+ *
+ * The flags are raised *before* the workers start rather than during the run,
+ * so every worker is guaranteed to hit one instead of racing the signal against
+ * a compute that may already be finished -- deterministic coverage rather than
+ * a test that usually exercises nothing.
+ *
+ * Emits a few "tid:..." progress lines on stdout; that is the feature working.
+ * Keep this last in main(): sig_handler sets all CPU_SETSIZE flags and only the
+ * ones belonging to tasks that actually run get consumed, so the leftovers
+ * would make later suites emit stray progress lines.
+ */
+void test_concurrent_matrix_inmem_reporting() {
+    SUITE_START("test concurrent progress reporting");
+
+    using namespace concurrency_fixture;
+
+    // Also installs the SIGUSR1 handler, so the raise() below cannot hit the
+    // default disposition and kill the test process.
+    std::vector<float> reference;
+    serial_reference(reference);
+
+    raise(SIGUSR1);
+
+    std::vector<outcome> results(N_THREADS);
+    std::vector<std::thread> workers;
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers.emplace_back(matrix_worker, N_ITERS, &reference, &results[t]);
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers[t].join();
+
+    // Reporting must not disturb the results, and must not crash.
     check(results, N_ITERS);
 
     SUITE_END();
@@ -2617,6 +2661,8 @@ int main(int argc, char** argv) {
     test_permanova_inmem();
     test_concurrent_matrix_inmem();
     test_concurrent_faith_pd_inmem();
+    // must stay last; see the comment on the function
+    test_concurrent_matrix_inmem_reporting();
 
     printf("\n");
     printf(" %i / %i suites failed\n", suites_failed, suites_run);

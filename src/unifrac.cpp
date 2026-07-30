@@ -549,6 +549,4 @@ void su::process_stripes(biom_interface &table,
                                        std::ref(dm_stripes_total),
                                        &tasks[tid]);
     }
-
-    remove_report_status();
 }
