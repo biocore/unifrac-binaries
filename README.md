@@ -211,99 +211,71 @@ several independent computes in flight at once. This section is the contract for
 that case. It applies to the CPU builds; **GPU/ACC builds are not covered**, as
 concurrent computes there share one device and one default queue.
 
-**Safe to call concurrently from several threads of one process:**
+**Safe to call concurrently from several threads of one process,** each with
+`seed >= 0` where it takes a seed:
 
-- `one_off_matrix_inmem_v4` / `one_off_matrix_inmem_fp32_v4` with `seed >= 0`,
-  or with `subsample_depth == 0` (no subsampling means nothing is drawn).
-- `one_off_matrix_inmem_v3` / `_fp32_v3` / `_v2`, and `one_off_inmem*`, with
-  `subsample_depth == 0`.
-- `faith_pd_inmem`.
-- `subsample_table_inmem_seeded` with `seed >= 0`, and the `subsampled_*`
-  accessors on distinct objects.
-- `pcoa_seeded`, `pcoa_fp32_seeded`, `pcoa_mixed_seeded`,
-  `compute_permanova_inmem_fp64_seeded` and `compute_permanova_inmem_fp32_seeded`,
-  each with `seed >= 0`. See the note on ordination reproducibility below.
+- `one_off_matrix_inmem_v4` / `_fp32_v4`; also `_v3` / `_v2` and `one_off_inmem*`
+  when `subsample_depth == 0`, since then nothing is drawn
+- `faith_pd_inmem`
+- `subsample_table_inmem_seeded`, and the `subsampled_*` accessors on distinct
+  objects
+- `pcoa_seeded` / `_fp32_seeded` / `_mixed_seeded`,
+  `compute_permanova_inmem_fp64_seeded` / `_fp32_seeded`
 
-The input `support_biom_t` arrays and `support_bptree_t` topology are read, never
-written, so concurrent calls may share them — as is the distance matrix handed to
-the ordination entry points. Each call allocates its own result; `destroy_*` is
-safe on distinct results.
+Inputs are read, never written, so concurrent calls may share a table, a tree or
+a distance matrix. Each call allocates its own result.
 
-**Not safe to call concurrently — these use process-global state:**
+**Not safe — these reach process-global RNG state:**
 
-- `ssu_set_random_seed`, and any entry point given `seed < 0` while
-  `subsample_depth > 0`. Pass a non-negative `seed` to a `_v4` entry point
-  instead of seeding globally; that is the whole reason `_v4` exists. Note there
-  are *two* chained process-global generators here, not one: `ssu_set_random_seed`
-  reseeds this library's `std::mt19937`, then consumes one draw from it to derive
-  a seed for scikit-bio-binaries' own separate global generator. So any other
-  call that draws from those generators and lands in between — including any
-  `pcoa*` or `permanova*` call made with `seed < 0` — desynchronizes the
-  sequence and silently breaks reproducibility, even single-threaded. The
-  `_seeded` forms at `seed >= 0` do not draw from either generator and so do not
-  perturb it.
-- `pcoa`, `pcoa_fp32`, `pcoa_mixed`, `compute_permanova_inmem_fp64` and
-  `compute_permanova_inmem_fp32`. These are defined as their `_seeded` form at
-  `seed = -1`, which passes `-1` down to scikit-bio-binaries, which then draws
-  from *its* process-global generator. Use the `_seeded` entry points with a
-  non-negative seed instead; that path builds a generator local to the call and
-  touches no shared state. A second reason to prefer them for `pcoa`: the three
-  non-seeded `pcoa*` names carry C++ linkage and have no wrapper in the combined
-  dispatcher, so they are only linkable against `src/libssu.so` directly, not
-  against the `libssu.so` that gets installed.
-- The file-writing entry points (`unifrac_to_file*`, `write_mat*`): they compute
-  PCoA internally with `seed = -1` and write to a caller-supplied path.
-- `find_eigens_fast` / `find_eigens_fast_fp32`, which still pass `seed = -1`
-  unconditionally. They were left alone deliberately: `pcoa*_seeded` covers the
-  ordination use case, and nothing in this repository calls the eigen entry
-  points directly. Threading a seed through them is the same two-line change if
-  a consumer needs it.
+- `ssu_set_random_seed`, and every non-seeded form, each of which is defined as
+  its seeded form at `seed = -1`. Pass a non-negative seed instead of seeding
+  globally; that is what the seeded entry points are for.
+- The file-writing entry points (`unifrac_to_file*`, `write_mat*`) and
+  `find_eigens_fast*`, which pass `seed = -1` internally. Threading a seed
+  through `find_eigens_fast*` is a small change if a consumer needs it; nothing
+  in this repository calls it.
 
-**Ordination reproduces to a tolerance, not bit-exactly.** Where a concurrent
-`one_off_matrix_inmem_*` is bit-identical to the serial answer, a concurrent
-`pcoa*_seeded` is not: the randomized SVD accumulates through parallel reductions
-whose order is not pinned, so a compute competing with others drifts by ULPs
-(2.8e-16 measured on the 6-sample fixture, against a signal of ~0.5 for a changed
-seed). For PERMANOVA the same drift lands differently — a p-value is a rank in
-the permutation distribution, so it either does not move or steps by `1/n_perm`
-when the observed F crosses a neighbouring permutation. Treat a seeded ordination
-as reproducible, not as a bitwise cache key. On x86_64, `skbb_permanova_*` also
-consults a lazily-cached CPU-dispatch flag regardless of seed, which falls under
-the note on detection caches below.
+Two traps worth knowing, even single-threaded:
+
+- `ssu_set_random_seed` drives *two* chained generators — it reseeds this
+  library's `std::mt19937`, then draws once from it to seed scikit-bio-binaries'
+  own global one. Any `seed < 0` call landing in between desynchronizes the
+  sequence and silently breaks reproducibility.
+- The three non-seeded `pcoa*` names have C++ linkage and no dispatcher wrapper,
+  so they link only against `src/libssu.so`, not the installed one. The
+  `_seeded` forms are `EXTERN` and reachable either way.
+
+**Ordination reproduces to a tolerance, not bit-exactly.** A concurrent
+`one_off_matrix_inmem_*` is bit-identical to the serial answer; a concurrent
+`pcoa*_seeded` is not, because its parallel reductions are not order-pinned —
+2.8e-16 measured on the 6-sample fixture, against ~0.5 for a changed seed. A
+PERMANOVA p-value is a rank, so it instead either holds or steps by `1/n_perm`.
+Reproducible, but not a bitwise cache key.
 
 **A seeded subsample reproduces per thread count, not across thread counts.**
-`subsample_depth > 0` distributes the draw across the OpenMP team: one generator
-per thread, seeded in turn from the seed you passed, with observations assigned
-to threads by the schedule. Both the number of generators and which observation
-consumes which one therefore depend on the team size, so the same `seed` can give
-a different subsampled matrix at a different width. Verified: on the 6-sample
-`src/test.biom` fixture at `seed = 42`, widths 1, 2 and 4 agree and width 8
-differs. Concurrent callers in one process are unaffected as long as they use the
-same width — each thread gets its own team of that size — but a caller that
-varies its width per query (say from a host thread-pool setting) should treat the
-result as reproducible only for a fixed (seed, width) pair.
-
-**Detection caches.** The first call into a compute lazily fills a non-atomic
-`static int` recording which accelerator and CPU variant to use (`proc_use_acc`
-in `src/unifrac.cpp`, `skbio_use_acc` in `src/skbio_alt.cpp`, plus an equivalent
-in the dependency). Concurrent first calls therefore race on it. It is benign in
-practice — detection is a pure function of the environment, so every racing
-writer stores the same value — but a sanitizer build will flag it, and if
-`UNIFRAC_GPU_INFO` or `UNIFRAC_CPU_INFO` is set, the informational lines from
-concurrent first calls can interleave on stdout.
+The draw is distributed across the OpenMP team, so team size changes the result:
+on `src/test.biom` at `seed = 42`, widths 1, 2 and 4 agree and width 8 differs.
+Concurrent callers sharing a width are unaffected; a caller that varies width per
+query should treat results as reproducible only per `(seed, width)` pair.
 
 **Choosing a thread count per call.** There is no `n_threads` argument; fan-out
-is OpenMP's. `omp_set_num_threads()` sets `nthreads-var`, which the OpenMP spec
-scopes to the calling task, so **each of your threads can pick its own width
-without disturbing the others** — set it on the calling thread rather than
-serializing calls to protect it. Note that W concurrent computes each get their
-own team, so choose widths that sum to the cores you have rather than letting
-each default to all of them.
+is OpenMP's. `omp_set_num_threads()` sets `nthreads-var`, which the spec scopes
+to the calling task, so **each of your threads can pick its own width without
+disturbing the others** — set it on the calling thread rather than serializing to
+protect it. W concurrent computes each get a full team, so choose widths that sum
+to the cores you have.
+
+**Detection caches.** The first compute lazily fills non-atomic `static int`s
+recording which accelerator and CPU variant to use (`proc_use_acc`,
+`skbio_use_acc`, and one in the dependency), so concurrent first calls race on
+them. Benign — detection is a pure function of the environment and every writer
+stores the same value — but a sanitizer will flag it, and with `UNIFRAC_GPU_INFO`
+or `UNIFRAC_CPU_INFO` set the informational lines can interleave.
 
 **SIGUSR1.** On non-WASM builds the first compute installs a `SIGUSR1` handler
-for progress reporting and never restores the previous disposition. If that
-matters to your host process, install your handler after the first compute, or
-build the in-memory subset, which omits signal handling entirely.
+for progress reporting and never restores the previous disposition. Install your
+own handler after the first compute, or build the in-memory subset, which omits
+signal handling entirely.
 
 ## Older CPU support
 
