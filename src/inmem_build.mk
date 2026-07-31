@@ -27,7 +27,11 @@
 # for non-sibling layouts:
 #   make inmem_static SKBB_DIR=/some/other/path
 SKBB_DIR ?= $(abspath $(CURDIR)/../../scikit-bio-binaries)
-INMEM_SKBB_EXTERN := $(SKBB_DIR)/src/extern
+# Where the public skbb headers are staged from. Defaults to a source
+# checkout; override to consume an installed skbb instead, e.g. a conda
+# package, so headers and library come from the same version:
+#   make inmem_static INMEM_SKBB_EXTERN=$CONDA_PREFIX/include/scikit-bio-binaries
+INMEM_SKBB_EXTERN ?= $(SKBB_DIR)/src/extern
 
 INMEM_SKBB_INC_STAGE := .inmem-skbb-include
 INMEM_SKBB_STAGED_HS := $(INMEM_SKBB_INC_STAGE)/scikit-bio-binaries/util.h \
@@ -115,6 +119,63 @@ libssu_inmem.a: $(INMEM_OBJS)
 inmem_static: libssu_inmem.a
 
 # --------------------------------------------------------------------------
+# Test
+# --------------------------------------------------------------------------
+# Concurrency coverage for the archive as embedders link it. The suite in
+# test_su.cpp exercises the same entry points, but only as built for
+# libssu.so; this build defines UNIFRAC_WASM (no signal handler, CPU_SETSIZE
+# fallback) while still being multi-threaded, so it is a distinct
+# configuration.
+#
+# Linking is the embedder's problem in general -- the archive carries no skbb
+# -- but the test has to resolve those symbols somehow. It links whatever skbb
+# is installed under PREFIX, which is also where INMEM_SKBB_EXTERN should point
+# so the headers match the library.
+#
+# The rpath is what lets the test run straight out of the build directory:
+# conda does not put its lib dir on LD_LIBRARY_PATH, so without it the binary
+# links fine and then fails to start.
+INMEM_SKBB_LIB     ?= -lskbb
+INMEM_TEST_LDFLAGS ?= -L$(PREFIX)/lib -Wl,-rpath,$(PREFIX)/lib
+
+test_concurrency_inmem: tests/inmem/test_concurrency_inmem.cpp libssu_inmem.a \
+                        tests/wasm/fixtures.hpp tests/wasm/check_macros.hpp \
+                        api.hpp $(INMEM_SKBB_STAGED_HS)
+	$(INMEM_CXX) $(INMEM_CXXFLAGS) $< -o $@ libssu_inmem.a \
+	    $(INMEM_TEST_LDFLAGS) $(INMEM_SKBB_LIB) -lpthread
+
+inmem_test: test_concurrency_inmem
+	./test_concurrency_inmem
+
+# ASan variant. A plain run only catches a fault that happens to land; the
+# n_substeps cases in particular corrupted the heap silently before they were
+# clamped, and only ASan called it. Note that the report_status use-after-free
+# that motivated the concurrency work cannot fire in *this* configuration --
+# UNIFRAC_WASM means no SIGUSR1 handler is installed, so no flag is ever set --
+# so what this gate covers is the memory-safety class generally, not that
+# specific bug. Notes:
+#   - The runtime has to be preloaded even though the binary links it:
+#     libskbb.so gets initialized ahead of it and ASan then refuses to start.
+#     -static-libasan would sidestep the preload, but conda-forge's
+#     libsanitizer package ships no libasan.a, so it will not link there.
+#   - Leak detection is off. The target here is memory safety in unifrac's own
+#     code under concurrency, not allocation hygiene in whatever skbb build
+#     happens to be installed.
+#   - The archive keeps its shipped -O3; the n_substeps overflow this covers
+#     was confirmed to report at that level.
+#   - Objects are rebuilt instrumented, so this cleans on the way in and back
+#     out again; otherwise an instrumented libssu_inmem.a would sit there
+#     looking up to date and get shipped.
+inmem_test_asan:
+	$(MAKE) inmem_clean
+	$(MAKE) test_concurrency_inmem INMEM_MPFLAG="-fopenmp -fsanitize=address -g"
+	@asan_rt=`$(INMEM_CXX) -print-file-name=libasan.so`; \
+	    test -f "$$asan_rt" || { echo "ERROR: no ASan runtime from '$(INMEM_CXX) -print-file-name=libasan.so' (got '$$asan_rt')"; exit 1; }; \
+	    echo "LD_PRELOAD=$$asan_rt ASAN_OPTIONS=detect_leaks=0 ./test_concurrency_inmem"; \
+	    LD_PRELOAD=$$asan_rt ASAN_OPTIONS=detect_leaks=0 ./test_concurrency_inmem; \
+	    rc=$$?; $(MAKE) inmem_clean; exit $$rc
+
+# --------------------------------------------------------------------------
 # Install (archive + public headers under a stable prefix layout).
 # Embedders pick up libssu_inmem.a + the unifrac/ header tree via
 # vcpkg / CMake / pkg-config conventions.
@@ -135,7 +196,7 @@ install_inmem: libssu_inmem.a
 # Cleanup
 # --------------------------------------------------------------------------
 inmem_clean:
-	rm -f libssu_inmem.a *.inmem.o
+	rm -f libssu_inmem.a *.inmem.o test_concurrency_inmem
 	rm -rf $(INMEM_SKBB_INC_STAGE)
 
-.PHONY: inmem_static install_inmem inmem_clean
+.PHONY: inmem_static inmem_test inmem_test_asan install_inmem inmem_clean
