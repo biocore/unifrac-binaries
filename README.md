@@ -247,6 +247,18 @@ written, so concurrent calls may share them. Each call allocates its own result;
 - The file-writing entry points (`unifrac_to_file*`, `write_mat*`): they compute
   PCoA internally with `seed = -1` and write to a caller-supplied path.
 
+**A seeded subsample reproduces per thread count, not across thread counts.**
+`subsample_depth > 0` distributes the draw across the OpenMP team: one generator
+per thread, seeded in turn from the seed you passed, with observations assigned
+to threads by the schedule. Both the number of generators and which observation
+consumes which one therefore depend on the team size, so the same `seed` can give
+a different subsampled matrix at a different width. Verified: on the 6-sample
+`src/test.biom` fixture at `seed = 42`, widths 1, 2 and 4 agree and width 8
+differs. Concurrent callers in one process are unaffected as long as they use the
+same width — each thread gets its own team of that size — but a caller that
+varies its width per query (say from a host thread-pool setting) should treat the
+result as reproducible only for a fixed (seed, width) pair.
+
 **Detection caches.** The first call into a compute lazily fills a non-atomic
 `static int` recording which accelerator and CPU variant to use (`proc_use_acc`
 in `src/unifrac.cpp`, `skbio_use_acc` in `src/skbio_alt.cpp`, plus an equivalent
