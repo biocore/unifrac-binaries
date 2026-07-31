@@ -4,12 +4,6 @@
 #include <thread>
 #include <vector>
 
-/* Only for skbb_get_acc_mode(), so the ordination concurrency tests can tell
- * whether the dependency is about to run on a GPU. Both test binaries link
- * scikit-bio-binaries -- test_su directly, test_su_api alongside libssu.
- */
-#include <scikit-bio-binaries/util.h>
-
 #ifndef API_ONLY
 #include "tree.hpp"
 #include "biom.hpp"
@@ -2091,7 +2085,30 @@ namespace concurrency_fixture {
     static const unsigned int PERM_PERMS = 99;
     static const double       PCOA_TOL   = 1e-12;
     static const double       FSTAT_TOL  = 1e-6;
-    static const double       PVALUE_TOL = 1e-2;
+    /* A p-value is a rank over n_perm+1 pseudo-F values, so its quantum is
+     * 1/(n_perm+1) and the contract in README promises only that it holds or
+     * steps by one. Allow exactly one step: at 1e-2 this assertion was tighter
+     * than the library guarantees, and two things can spend that step without
+     * any concurrency defect. On CPU, ULP drift in the s_T reduction moves the
+     * observed F and can flip a count when it sits on a tail boundary. On GPU,
+     * scikit-bio/scikit-bio-binaries#15 leaves the last permutation's pseudo-F
+     * uninitialized, so one count is heap garbage -- stable when computes run
+     * one at a time, not when they overlap.
+     *
+     * What one step costs us, measured on this fixture at ORD_SEED = 7 rather
+     * than assumed: of 59 other seeds, 49 move the p-value past 1.5 counts and
+     * 10 land inside it. So a single comparison catches a leaked seed about
+     * five times in six -- but a leak would have to survive all N_THREADS *
+     * N_ITERS of them, and it does not. Widening from 1e-2 barely moves that:
+     * at the old bound 2 of those 10 were caught, the rest already were not.
+     *
+     * Note fstat is the unpermuted statistic and does not depend on the seed at
+     * all -- it was identical for all 59. FSTAT_TOL is the corruption check;
+     * the p-value is the only part that sees the permutation stream. That the
+     * seed is consumed at all is pinned directly elsewhere, by test_pcoa_seeded
+     * and by the permanova case in tests/inmem.
+     */
+    static const double       PVALUE_TOL = 1.5 / (PERM_PERMS + 1);
 
     // the distance matrix both ordination tests run on
     static mat_full_fp64_t* ordination_dm() {
@@ -2145,32 +2162,8 @@ namespace concurrency_fixture {
         }
     }
 
-    /* Whether the p-value half of the PERMANOVA check is meaningful here.
-     *
-     * On a GPU, scikit-bio-binaries leaves the last permutation's pseudo-F
-     * uninitialized. permanova_perm_fp_sW_T sizes the device buffer for
-     * permutted_sWs at n_perm and copies back n_perm elements, but launches the
-     * kernel over n_perm+1 groupings (src/distance/permanova.cpp: the
-     * acc_create_buf / acc_copyout_buf pair, against a host array of n_perm+1).
-     * permanova_T then reads permutted_fstats[n_perm] while counting, so the
-     * p-value carries one count of whatever was on the heap. Run serially that
-     * garbage is stable and the answer looks reproducible; with four callers
-     * churning the heap it is not, and one count is 1/(n_perm+1) -- exactly
-     * PVALUE_TOL. fstat is index 0, which is copied back correctly, so it stays
-     * asserted in every configuration.
-     *
-     * scikit-bio/scikit-bio-binaries#15. Drop this gate once that is fixed and
-     * conda-forge is rebuilt. Must be called after a compute has gone through
-     * skbio_check_acc(), which is what forces skbb to the CPU in a CPU-only
-     * build.
-     */
-    static bool permanova_pvalue_is_reproducible() {
-        return skbb_get_acc_mode() == SKBB_ACC_CPU;
-    }
-
     static void permanova_worker(const double *dm, unsigned int n_samples,
-                                 double ref_fstat, double ref_pvalue,
-                                 bool check_pvalue, outcome* out) {
+                                 double ref_fstat, double ref_pvalue, outcome* out) {
         for (unsigned int i = 0; i < N_ITERS; i++) {
             double fstat = 0.0, pvalue = 0.0;
             if (compute_permanova_inmem_fp64_seeded(dm, n_samples, inmem_fixture::GROUPING,
@@ -2179,8 +2172,7 @@ namespace concurrency_fixture {
                 out->n_status++;
                 continue;
             }
-            if (fabs(fstat - ref_fstat) > FSTAT_TOL ||
-                (check_pvalue && fabs(pvalue - ref_pvalue) > PVALUE_TOL))
+            if (fabs(fstat - ref_fstat) > FSTAT_TOL || fabs(pvalue - ref_pvalue) > PVALUE_TOL)
                 out->n_mismatch++;
             out->n_ok++;
         }
@@ -2221,20 +2213,8 @@ void test_concurrent_permanova_inmem() {
     ASSERT(ref_fstat > 0.0);
     ASSERT(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
 
-    /* The reference call above settled the accelerator choice, so this is
-     * stable. Log it unconditionally: on the linux-gpu-cuda runner detection is
-     * intermittent between processes within one job -- the same test_su_api
-     * binary reported "NVIDIA GPU detected" on run 30652784446 and "not
-     * detected" on 30656219910 -- so a green run does not by itself say which
-     * path this suite took.
-     */
-    const bool check_pvalue = permanova_pvalue_is_reproducible();
-    printf("NOTE: skbb acc mode %u; p-value %s\n", skbb_get_acc_mode(),
-           check_pvalue ? "checked"
-                        : "not checked, see scikit-bio/scikit-bio-binaries#15");
-
     run_workers([&](outcome* o) {
-        permanova_worker(dm->matrix, dm->n_samples, ref_fstat, ref_pvalue, check_pvalue, o);
+        permanova_worker(dm->matrix, dm->n_samples, ref_fstat, ref_pvalue, o);
     });
 
     destroy_mat_full_fp64(&dm);

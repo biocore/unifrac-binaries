@@ -252,16 +252,16 @@ Two traps worth knowing, even single-threaded:
 PERMANOVA p-value is a rank, so it instead either holds or steps by `1/n_perm`.
 Reproducible, but not a bitwise cache key.
 
-**A PERMANOVA p-value is not reproducible at all on a GPU, concurrently or
-not.** scikit-bio-binaries sizes the device buffer for the permuted pseudo-F
-values at `n_perm` but launches its kernel over `n_perm + 1` groupings, so the
-last permutation is never computed on the host side and the counting loop reads
-uninitialized memory. Every GPU p-value is therefore one count of heap garbage
-away from correct — stable enough to look reproducible when computes run one at
-a time, not when they overlap. `fstat` is unaffected. This is
+**On a GPU, spend that step on a dependency bug instead.**
+scikit-bio-binaries sizes the device buffer for the permuted pseudo-F values at
+`n_perm` but launches its kernel over `n_perm + 1` groupings, so the last
+permutation is never computed on the host side and the counting loop reads
+uninitialized memory. Every GPU p-value is one count of heap garbage away from
+correct — stable enough to look reproducible when computes run one at a time,
+not when they overlap. `fstat` is unaffected. This is
 [scikit-bio-binaries#15](https://github.com/scikit-bio/scikit-bio-binaries/issues/15);
 until it is fixed, force the ordination path to the CPU with `SKBB_USE_GPU=N` if
-you need a reproducible p-value.
+you need the p-value to be exact rather than within one count.
 
 **A seeded subsample reproduces per thread count, not across thread counts.**
 The draw is distributed across the OpenMP team, so team size changes the result:

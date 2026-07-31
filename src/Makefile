@@ -200,11 +200,13 @@ test_binaries: test_su test_ska test_api test_su_api
 test_su: test_su.cpp api.hpp tree.o tsv.o biom.o biom_inmem.o biom_subsampled.o unifrac.o skbio_alt.o api.o $(UNIFRAC_FILES)
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) test_su.cpp -o $@ tree.o biom.o biom_inmem.o biom_subsampled.o tsv.o $(UNIFRAC_FILES) unifrac.o skbio_alt.o api.o -llz4 $(SKBBLIB) -lpthread
 # then exercise the optimized code through the API interface
-# SKBBLIB is not for the code under test -- that is reached only through libssu.
-# It is for skbb_get_acc_mode(), which the ordination concurrency tests read to
-# see whether the dependency is running on a GPU.
+# Do not add $(SKBBLIB) here. Making libskbb a direct DT_NEEDED of the
+# executable stops unifrac's NVIDIA detection from finding the device: on the
+# linux-gpu-cuda runner, test_api (no -lskbb) detects it on every run while
+# test_su and a briefly-linked test_su_api did not on any. That silently drops
+# this whole suite off the GPU.
 test_su_api: test_su.cpp test_helper.hpp api.hpp $(PREFIX)/lib/lib$(SSU).so
-	h5c++ $(CPPFLAGS) $(EXEFLAGS) -DAPI_ONLY=1 test_su.cpp -o $@ -l$(SSU) $(SKBBLIB) -lpthread
+	h5c++ $(CPPFLAGS) $(EXEFLAGS) -DAPI_ONLY=1 test_su.cpp -o $@ -l$(SSU) -lpthread
 
 # Create an archive, so we do not need dependencies for functions we do not use
 test_ska_deps.a: tree.o tsv.o biom.o biom_inmem.o biom_subsampled.o skbio_alt.o api.o $(UNIFRAC_FILES)
