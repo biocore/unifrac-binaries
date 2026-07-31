@@ -4,6 +4,12 @@
 #include <thread>
 #include <vector>
 
+/* Only for skbb_get_acc_mode(), so the ordination concurrency tests can tell
+ * whether the dependency is about to run on a GPU. Both test binaries link
+ * scikit-bio-binaries -- test_su directly, test_su_api alongside libssu.
+ */
+#include <scikit-bio-binaries/util.h>
+
 #ifndef API_ONLY
 #include "tree.hpp"
 #include "biom.hpp"
@@ -2139,8 +2145,31 @@ namespace concurrency_fixture {
         }
     }
 
+    /* Whether the p-value half of the PERMANOVA check is meaningful here.
+     *
+     * On a GPU, scikit-bio-binaries leaves the last permutation's pseudo-F
+     * uninitialized. permanova_perm_fp_sW_T sizes the device buffer for
+     * permutted_sWs at n_perm and copies back n_perm elements, but launches the
+     * kernel over n_perm+1 groupings (src/distance/permanova.cpp: the
+     * acc_create_buf / acc_copyout_buf pair, against a host array of n_perm+1).
+     * permanova_T then reads permutted_fstats[n_perm] while counting, so the
+     * p-value carries one count of whatever was on the heap. Run serially that
+     * garbage is stable and the answer looks reproducible; with four callers
+     * churning the heap it is not, and one count is 1/(n_perm+1) -- exactly
+     * PVALUE_TOL. fstat is index 0, which is copied back correctly, so it stays
+     * asserted in every configuration.
+     *
+     * Reported upstream. Drop this gate once skbb sizes that buffer n_perm+1.
+     * Must be called after a compute has gone through skbio_check_acc(), which
+     * is what forces skbb to the CPU in a CPU-only build.
+     */
+    static bool permanova_pvalue_is_reproducible() {
+        return skbb_get_acc_mode() == SKBB_ACC_CPU;
+    }
+
     static void permanova_worker(const double *dm, unsigned int n_samples,
-                                 double ref_fstat, double ref_pvalue, outcome* out) {
+                                 double ref_fstat, double ref_pvalue,
+                                 bool check_pvalue, outcome* out) {
         for (unsigned int i = 0; i < N_ITERS; i++) {
             double fstat = 0.0, pvalue = 0.0;
             if (compute_permanova_inmem_fp64_seeded(dm, n_samples, inmem_fixture::GROUPING,
@@ -2149,7 +2178,8 @@ namespace concurrency_fixture {
                 out->n_status++;
                 continue;
             }
-            if (fabs(fstat - ref_fstat) > FSTAT_TOL || fabs(pvalue - ref_pvalue) > PVALUE_TOL)
+            if (fabs(fstat - ref_fstat) > FSTAT_TOL ||
+                (check_pvalue && fabs(pvalue - ref_pvalue) > PVALUE_TOL))
                 out->n_mismatch++;
             out->n_ok++;
         }
@@ -2190,8 +2220,13 @@ void test_concurrent_permanova_inmem() {
     ASSERT(ref_fstat > 0.0);
     ASSERT(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
 
+    // the reference call above settled the accelerator choice, so this is stable
+    const bool check_pvalue = permanova_pvalue_is_reproducible();
+    if (!check_pvalue)
+        printf("NOTE: skbb is on an accelerator; checking fstat only, not the p-value\n");
+
     run_workers([&](outcome* o) {
-        permanova_worker(dm->matrix, dm->n_samples, ref_fstat, ref_pvalue, o);
+        permanova_worker(dm->matrix, dm->n_samples, ref_fstat, ref_pvalue, check_pvalue, o);
     });
 
     destroy_mat_full_fp64(&dm);
