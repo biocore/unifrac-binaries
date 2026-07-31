@@ -470,6 +470,31 @@ ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims
    return (*dl_compute_permanova_inmem_fp32)(mat, n_dims, grouping, permanova_perms, fstat, pvalue);
 }
 
+static void (*dl_pcoa_seeded)(const double*, uint32_t, uint32_t, int, double**, double**, double**) = NULL;
+static void (*dl_pcoa_fp32_seeded)(const float*, uint32_t, uint32_t, int, float**, float**, float**) = NULL;
+static void (*dl_pcoa_mixed_seeded)(const double*, uint32_t, uint32_t, int, float**, float**, float**) = NULL;
+
+void pcoa_seeded(const double *mat, const uint32_t n_samples, const uint32_t n_dims, int seed,
+                 double **eigenvalues, double **samples, double **proportion_explained) {
+   cond_ssu_load("pcoa_seeded", (void **) &dl_pcoa_seeded);
+
+   (*dl_pcoa_seeded)(mat, n_samples, n_dims, seed, eigenvalues, samples, proportion_explained);
+}
+
+void pcoa_fp32_seeded(const float *mat, const uint32_t n_samples, const uint32_t n_dims, int seed,
+                      float **eigenvalues, float **samples, float **proportion_explained) {
+   cond_ssu_load("pcoa_fp32_seeded", (void **) &dl_pcoa_fp32_seeded);
+
+   (*dl_pcoa_fp32_seeded)(mat, n_samples, n_dims, seed, eigenvalues, samples, proportion_explained);
+}
+
+void pcoa_mixed_seeded(const double *mat, const uint32_t n_samples, const uint32_t n_dims, int seed,
+                       float **eigenvalues, float **samples, float **proportion_explained) {
+   cond_ssu_load("pcoa_mixed_seeded", (void **) &dl_pcoa_mixed_seeded);
+
+   (*dl_pcoa_mixed_seeded)(mat, n_samples, n_dims, seed, eigenvalues, samples, proportion_explained);
+}
+
 static ComputeStatus (*dl_compute_permanova_inmem_fp64_seeded)(const double*, unsigned int, const uint32_t*, unsigned int, int, double*, double*) = NULL;
 static ComputeStatus (*dl_compute_permanova_inmem_fp32_seeded)(const float*, unsigned int, const uint32_t*, unsigned int, int, float*, float*) = NULL;
 

@@ -247,7 +247,10 @@ safe on distinct results.
   `seed = -1`, which passes `-1` down to scikit-bio-binaries, which then draws
   from *its* process-global generator. Use the `_seeded` entry points with a
   non-negative seed instead; that path builds a generator local to the call and
-  touches no shared state.
+  touches no shared state. A second reason to prefer them for `pcoa`: the three
+  non-seeded `pcoa*` names carry C++ linkage and have no wrapper in the combined
+  dispatcher, so they are only linkable against `src/libssu.so` directly, not
+  against the `libssu.so` that gets installed.
 - The file-writing entry points (`unifrac_to_file*`, `write_mat*`): they compute
   PCoA internally with `seed = -1` and write to a caller-supplied path.
 - `find_eigens_fast` / `find_eigens_fast_fp32`, which still pass `seed = -1`

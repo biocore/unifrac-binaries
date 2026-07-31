@@ -13,6 +13,13 @@
  *
  * Meant to be included alongide the modern implementation source code.
  *
+ * What belongs here versus in api.cpp: a forwarder whose old name is
+ * *superseded* by a newer version of the same entry point goes here. A
+ * non-seeded peer that remains first-class -- subsample_table_inmem,
+ * compute_permanova_inmem_fp64/fp32, pcoa* -- stays in api.cpp. The difference
+ * is not cosmetic: ../combined/libssu.c includes this header, so anything
+ * defined here needs no dlsym stub there, while anything in api.cpp needs one.
+ *
  */
 
 #ifndef UNIFRAC_WASM
@@ -95,9 +102,6 @@ ComputeStatus one_off_matrix_fp32(const char* biom_filename, const char* tree_fi
 }
 #endif // UNIFRAC_WASM (file-based v2 compat wrappers)
 
-/* v3 predates the per-call subsample seed, so it takes the global-RNG path
- * (seed < 0), which is what it has always done.
- */
 ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                        const char* unifrac_method, bool variance_adjust, double alpha,
                                        bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
@@ -124,7 +128,6 @@ ComputeStatus one_off_inmem(const support_biom_t *table_data, const support_bptr
                                    result);
 }
 
-/* see the note on one_off_matrix_inmem_v3 above */
 ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                             const char* unifrac_method, bool variance_adjust, double alpha,
                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,

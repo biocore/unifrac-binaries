@@ -25,30 +25,26 @@
 /*
  * Concurrency
  * -----------
- * Several computes may be in flight in one process, with limits. In short:
- * one_off_matrix_inmem_v4 / _fp32_v4 with seed >= 0 (or subsample_depth == 0),
- * faith_pd_inmem, subsample_table_inmem_seeded, pcoa_seeded / pcoa_fp32_seeded /
- * pcoa_mixed_seeded, and compute_permanova_inmem_fp64_seeded / _fp32_seeded --
- * each with seed >= 0 -- may be called concurrently; input tables, trees and
- * distance matrices are read-only and may be shared.
+ * Several computes may be in flight in one process. These may be called
+ * concurrently, each with seed >= 0 (or subsample_depth == 0, which draws
+ * nothing); input tables, trees and distance matrices are read-only and may be
+ * shared:
+ *
+ *   one_off_matrix_inmem_v4 / _fp32_v4
+ *   faith_pd_inmem
+ *   subsample_table_inmem_seeded
+ *   pcoa_seeded / pcoa_fp32_seeded / pcoa_mixed_seeded
+ *   compute_permanova_inmem_fp64_seeded / _fp32_seeded
  *
  * ssu_set_random_seed, and any of the above at seed < 0, go through
  * process-global RNG state and may not. That includes every non-seeded form,
- * which is defined as passing seed = -1: subsample_table_inmem, pcoa, pcoa_fp32,
- * pcoa_mixed, compute_permanova_inmem_fp64 / _fp32. GPU/ACC builds are not
- * covered. Accelerator detection caches race benignly on the first call, which a
- * sanitizer will notice.
+ * each of which is defined as its seeded form at seed = -1. GPU/ACC builds are
+ * not covered.
  *
- * Concurrent results are bit-identical to serial ones for the unifrac matrix
- * itself. The ordination entry points reproduce to a tight tolerance rather than
- * bit-exactly (~1e-15 observed on a 6-sample matrix): their parallel reductions
- * are not order-pinned, so a compute competing with others drifts by ULPs. See
- * the note on compute_permanova_inmem_*_seeded for how that lands on a p-value.
- *
- * Thread count is OpenMP's, and omp_set_num_threads() is scoped to the calling
- * task, so each caller can pick its own width without serializing.
- *
- * See "Calling the library concurrently" in README.md for the full contract.
+ * README.md, "Calling the library concurrently", is the full contract: what the
+ * ordination entry points do and do not promise about reproducibility, why a
+ * seeded subsample reproduces per thread count only, and the detection caches a
+ * sanitizer will flag.
  */
 
 #define PARTIAL_MAGIC "SSU-PARTIAL-01"
@@ -402,11 +398,7 @@ EXTERN ComputeStatus one_off_inmem(const support_biom_t *table_data, const suppo
  * n_substeps <uint> the number of substeps to use.
  * subsample_depth <uint> Depth of subsampling, if >0
  * subsample_with_replacement <bool> Use subsampling with replacement? (only True supported)
- * seed <int> Subsampling seed. If >= 0, the draw is deterministic in this
- *      argument alone and touches no shared state, so concurrent callers need
- *      no lock and each gets a reproducible result. If < 0, the draw comes from
- *      the process-global RNG that ssu_set_random_seed() sets, which is what v3
- *      always did. Ignored when subsample_depth is 0, since nothing is drawn.
+ * seed <int> Subsampling seed, as for one_off_matrix_inmem_v4.
  * mmap_dir <const char*> If not NULL, area to use for temp memory storage
  * result <mat_full_fp32_t**> the resulting distance matrix in full form, this is initialized within the method so using **
  *
@@ -807,17 +799,12 @@ EXTERN ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int
                                                   unsigned int permanova_perms,
                                                   float *fstat, float *pvalue);
 
-/* Per-call-seeded variants of compute_permanova_inmem_fp64/fp32. Equivalent to
- * the non-seeded forms but accept an explicit `seed` governing the permutation
- * draw, sidestepping the global RNG so concurrent PERMANOVAs no longer need an
- * external mutex. seed >= 0 draws from a generator local to the call; seed < 0
- * falls back to the global RNG, making the non-seeded API equivalent to passing
- * seed = -1.
+/* Per-call-seeded variants of compute_permanova_inmem_fp64/fp32; seed governs
+ * the permutation draw, as for one_off_matrix_inmem_v4.
  *
- * Note that reproducibility is to a tolerance, not bit-exact: the F statistic
- * is accumulated by parallel reductions whose order is not pinned, so it drifts
- * by ULPs, and a p-value can shift with it when the observed F sits near a
- * permutation-tail boundary.
+ * A p-value is a rank in the permutation distribution, so it does not drift
+ * smoothly: ULP drift in the observed F either leaves it alone or steps it by
+ * 1/permanova_perms.
  */
 EXTERN ComputeStatus compute_permanova_inmem_fp64_seeded(const double *mat, unsigned int n_dims,
                                                          const uint32_t *grouping,
@@ -1203,14 +1190,18 @@ void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, d
 void pcoa_fp32(const float * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
 void pcoa_mixed(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
 
-// Per-call-seeded variants of the three above. The randomized SVD needs a
-// random matrix; seed >= 0 draws it from a generator local to the call, so the
-// result is reproducible and no process-global RNG state is touched -- which is
-// what lets several PCoAs run at once. seed < 0 falls back to the global RNG,
-// making the non-seeded forms equivalent to passing seed = -1.
-void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double **eigenvalues, double **samples, double **proportion_explained);
-void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
-void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
+/* Per-call-seeded variants of the three above; seed as for
+ * one_off_matrix_inmem_v4.
+ *
+ * Unlike the three non-seeded forms, these are EXTERN, so they are reachable
+ * through the ../combined/libssu.c dispatcher -- which is the libssu.so that
+ * gets installed. The older names carry C++ linkage and no wrapper, so they are
+ * only callable when linking src/libssu.so directly; changing that now would
+ * break anyone linking the mangled names.
+ */
+EXTERN void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double **eigenvalues, double **samples, double **proportion_explained);
+EXTERN void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
+EXTERN void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
 
 
 #ifdef __cplusplus

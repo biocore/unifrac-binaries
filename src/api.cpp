@@ -1094,9 +1094,6 @@ compute_status compute_permanova_inmem_fp32_seeded(const float *mat, unsigned in
     return okay;
 }
 
-/* The non-seeded forms predate the per-call seed, so they take the global-RNG
- * path (seed < 0), which is what they have always done.
- */
 compute_status compute_permanova_inmem_fp64(const double *mat, unsigned int n_dims,
                                              const uint32_t *grouping,
                                              unsigned int permanova_perms,
@@ -1229,9 +1226,11 @@ inline compute_status compute_permanova_T(const char *grouping_filename, unsigne
          return grouping_missing;
        }
 
+       // seed < 0: the file-based permanova path predates the per-call seed
+       // and is documented as concurrency-unsafe in README.md
        su::permanova(result->matrix, n_samples,
                      grouping, permanova_perms,
-                     fstats[i], pvalues[i]);
+                     fstats[i], pvalues[i], /*seed*/ -1);
      }
      delete[] grouping;
 
@@ -1630,7 +1629,9 @@ public:
          TReal * samples;
          TReal * proportion_explained;
 
-         su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained);
+         // seed < 0: this path predates the per-call seed and is documented
+         // as concurrency-unsafe in README.md
+         su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained, /*seed*/ -1);
          TDBG_STEP("pcoa computed")
 
          char fmtstr2[64];
@@ -2102,7 +2103,8 @@ inline IOStatus write_mat_from_matrix_hdf5_T(const char* output_filename, TMat *
      TReal * samples;
      TReal * proportion_explained;
 
-     su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained);
+     // see the note on the other pcoa_inplace call site
+     su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained, /*seed*/ -1);
      TDBG_STEP("pcoa computed")
 
 
@@ -2816,9 +2818,6 @@ void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint3
   su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained, seed);
 }
 
-/* The non-seeded forms predate the per-call seed, so they take the global-RNG
- * path (seed < 0), which is what they have always done.
- */
 void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double * *eigenvalues, double * *samples, double * *proportion_explained) {
   pcoa_seeded(mat, n_samples, n_dims, -1, eigenvalues, samples, proportion_explained);
 }

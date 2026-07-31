@@ -494,6 +494,13 @@ static std::vector<double> run_seeded_pcoa(const double *mat, uint32_t n_samples
     return out;
 }
 
+static double run_seeded_permanova(const double *mat, uint32_t n_samples,
+                                   const uint32_t *grouping, unsigned int n_perm, int seed) {
+    double fstat = 0., pvalue = 0.;
+    su::permanova(mat, n_samples, grouping, n_perm, fstat, pvalue, seed);
+    return pvalue;
+}
+
 void test_pcoa_seeded() {
     SUITE_START("test pcoa seeded");
 
@@ -521,13 +528,9 @@ void test_pcoa_seeded() {
     const uint32_t n_samples = 9;
     const uint32_t n_dims    = 5;
 
-    /* Compared to a tolerance rather than bit-exactly. Repeated serial calls do
-     * come out bit-identical, but the underlying math accumulates through
-     * parallel reductions whose order is not pinned, so a run competing with
-     * other work drifts by an ULP or so (~3e-16 measured). The tolerance is
-     * still four orders of magnitude tighter than the signal it has to
-     * discriminate: changing the seed moves the answer by ~0.5 on this fixture,
-     * which is what SEED_DIFF below pins.
+    /* Tolerance, not bit-exact -- see "Ordination reproduces to a tolerance" in
+     * README.md. SAME is still far tighter than the signal it discriminates:
+     * changing the seed moves the answer by ~0.5 here, which SEED_DIFF pins.
      */
     const double SAME      = 1e-12;
     const double SEED_DIFF = 1e-6;
@@ -739,11 +742,9 @@ void test_permanova_unequal() {
  * p-value is at stake: the F statistic is computed from the data alone, so it
  * does not move with the seed.
  *
- * The tolerance is looser here, and deliberately so. A p-value is a rank within
- * the permutation distribution, so ULP drift in the observed F does not perturb
- * it smoothly -- it either does not move at all, or steps by 1/n_perm when F
- * crosses a neighbouring permutation. 1e-2 is the same bound test_su.cpp uses
- * on the same quantity for the same reason.
+ * The tolerance is looser here, and deliberately so: a p-value is a rank within
+ * the permutation distribution, so ULP drift in the observed F either leaves it
+ * alone or steps it by 1/n_perm.
  */
 void test_permanova_seeded() {
     SUITE_START("test permanova seeded");
@@ -759,25 +760,16 @@ void test_permanova_seeded() {
     const uint32_t n_samples  = 4;
     const unsigned int n_perm = 999;
 
-    struct local {
-        static double run(const double *mat, uint32_t n_samples,
-                          const uint32_t *grouping, unsigned int n_perm, int seed) {
-            double fstat = 0., pvalue = 0.;
-            su::permanova(mat, n_samples, grouping, n_perm, fstat, pvalue, seed);
-            return pvalue;
-        }
-    };
-
     const double SAME = 1e-2;
 
     // an explicit seed reproduces, with no seeding call in between
-    const double a = local::run(matrix, n_samples, grouping, n_perm, 7);
-    const double b = local::run(matrix, n_samples, grouping, n_perm, 7);
+    const double a = run_seeded_permanova(matrix, n_samples, grouping, n_perm, 7);
+    const double b = run_seeded_permanova(matrix, n_samples, grouping, n_perm, 7);
     ASSERT(fabs(a - b) < SAME);
 
     // ... and is not perturbed by the global generator moving underneath it
     su::set_random_seed(999);
-    const double c = local::run(matrix, n_samples, grouping, n_perm, 7);
+    const double c = run_seeded_permanova(matrix, n_samples, grouping, n_perm, 7);
     ASSERT(fabs(a - c) < SAME);
 
     /* The seed is really consumed. Checked across a spread of seeds rather than
@@ -788,16 +780,16 @@ void test_permanova_seeded() {
     {
         unsigned int differing = 0;
         for (int s = 8; s <= 12; s++)
-            if (fabs(local::run(matrix, n_samples, grouping, n_perm, s) - a) > SAME)
+            if (fabs(run_seeded_permanova(matrix, n_samples, grouping, n_perm, s) - a) > SAME)
                 differing++;
         ASSERT(differing > 0);
     }
 
     // a negative seed is the legacy path: same global seed, same answer
     su::set_random_seed(42);
-    const double g1 = local::run(matrix, n_samples, grouping, n_perm, -1);
+    const double g1 = run_seeded_permanova(matrix, n_samples, grouping, n_perm, -1);
     su::set_random_seed(42);
-    const double g2 = local::run(matrix, n_samples, grouping, n_perm, -1);
+    const double g2 = run_seeded_permanova(matrix, n_samples, grouping, n_perm, -1);
     ASSERT(fabs(g1 - g2) < SAME);
 
     SUITE_END();

@@ -9,24 +9,18 @@
 
 /*
  * Concurrency test for libssu_inmem.a -- the native in-memory static archive
- * that embedders link (see inmem_build.mk). The equivalent test in
- * src/test_su.cpp covers the same entry points, but only as built for
- * libssu.so; this configuration differs in ways that matter here:
+ * that embedders link (see inmem_build.mk). src/test_su.cpp covers the same
+ * entry points, but only as built for libssu.so, and this is a different
+ * configuration: UNIFRAC_WASM is defined, so no SIGUSR1 handler is installed
+ * and CPU_SETSIZE falls back to 32, in a build that -- unlike WASM -- is
+ * genuinely multi-threaded. Only the in-memory API surface is declared, so a
+ * file-based entry point slipping into this test would not compile.
  *
- *   - UNIFRAC_WASM is defined, so no SIGUSR1 handler is installed and
- *     CPU_SETSIZE falls back to 32 (unifrac_internal.cpp) -- in a build that,
- *     unlike WASM, is genuinely multi-threaded. One consequence worth being
- *     explicit about: the report_status use-after-free that motivated this
- *     work is inert here, because no flag is ever set. What is being pinned
- *     is that concurrent computes agree with the serial answer, not that
- *     particular bug.
- *   - OpenMP is on, so each caller thread spawns its own team.
- *   - Only the in-memory API surface is declared; a file-based entry point
- *     slipping into this test would not compile.
+ * One consequence worth being explicit about: the report_status use-after-free
+ * that motivated this work is inert here, because no flag is ever set. What
+ * this pins is that concurrent computes agree with the serial answer.
  *
- * Fixtures are shared with the WASM suite (tests/wasm/fixtures.hpp): the same
- * 5-OTU / 6-sample CSR table whose unweighted matrix the native CI already
- * validates.
+ * Fixtures are shared with the WASM suite (tests/wasm/fixtures.hpp).
  *
  * Worker threads never call CHECK -- it exits the process, which would race the
  * other workers and lose the diagnostic. Each records into its own slot and the
@@ -135,7 +129,7 @@ static void faith_pd_worker(outcome* out) {
             out->n_mismatch++;
         } else {
             for (int j = 0; j < FIXTURE_N_SAMP; j++) {
-                if (std::fabs(res->values[j] - expected[j]) > 1e-6) {
+                if (!almost_equal(res->values[j], expected[j], 1e-6)) {
                     out->n_mismatch++;
                     break;
                 }
@@ -148,13 +142,11 @@ static void faith_pd_worker(outcome* out) {
 
 /* Ordination under the same treatment. These entry points are declared outside
  * every UNIFRAC_WASM guard, so they compile into this archive -- but nothing
- * proved they link and run in it until this ran here. The suite in test_su.cpp
- * covers them only as built for libssu.so.
+ * proved they link and run in it until this ran here.
  *
- * Reproducibility is to a tolerance, not bit-exact: the randomized SVD
- * accumulates through parallel reductions whose order is not pinned, so a run
- * competing with others drifts by ULPs. The bound is still far tighter than the
- * signal -- changing the seed moves the answer by ~0.5 on this fixture.
+ * Tolerance, not bit-exact; see "Ordination reproduces to a tolerance" in
+ * README.md. The bound is far tighter than the signal: changing the seed moves
+ * the answer by ~0.5 on this fixture, which run_pcoa's caller checks.
  */
 static const int          ORD_SEED   = 7;
 static const unsigned int PCOA_DIMS  = 3;   // < n_samples (6)
@@ -187,7 +179,7 @@ static void pcoa_worker(const std::vector<double>* reference, outcome* out) {
             out->n_mismatch++;
         } else {
             for (size_t j = 0; j < got.size(); j++) {
-                if (std::fabs(got[j] - (*reference)[j]) > PCOA_TOL) {
+                if (!almost_equal(got[j], (*reference)[j], PCOA_TOL)) {
                     out->n_mismatch++;
                     break;
                 }
@@ -197,10 +189,6 @@ static void pcoa_worker(const std::vector<double>* reference, outcome* out) {
     }
 }
 
-/* A p-value is a rank in the permutation distribution, so ULP drift in the
- * observed F does not perturb it smoothly -- it either does not move, or steps
- * by 1/n_perm. Same bound the native suites use on the same quantity.
- */
 static void permanova_worker(double ref_fstat, double ref_pvalue, outcome* out) {
     for (unsigned int i = 0; i < N_ITERS; i++) {
         double fstat = 0.0, pvalue = 0.0;
@@ -210,7 +198,7 @@ static void permanova_worker(double ref_fstat, double ref_pvalue, outcome* out) 
             out->n_status++;
             continue;
         }
-        if (std::fabs(fstat - ref_fstat) > 1e-6 || std::fabs(pvalue - ref_pvalue) > 1e-2)
+        if (!almost_equal(fstat, ref_fstat, 1e-6) || !almost_equal(pvalue, ref_pvalue, 1e-2))
             out->n_mismatch++;
         out->n_ok++;
     }
@@ -254,7 +242,7 @@ int main(void) {
 
     // the serial answer is the one the native CI already validates
     for (int i = 0; i < FIXTURE_N_SAMP * FIXTURE_N_SAMP; i++)
-        CHECK(std::fabs(reference[i] - FIXTURE_UNWEIGHTED_DIST[i]) < 1e-6);
+        CHECK(almost_equal(double(reference[i]), FIXTURE_UNWEIGHTED_DIST[i], 1e-6));
 
     run_workers([&reference](outcome* o) { matrix_worker(-1, &reference, o); },
                 "concurrent one_off_matrix_inmem_fp32_v3");
@@ -275,7 +263,7 @@ int main(void) {
                 "concurrent one_off_matrix_inmem_fp32_v4 (seeded)");
 
     // ---- faith_pd, concurrent ------------------------------------------
-    run_workers([](outcome* o) { faith_pd_worker(o); },
+    run_workers(faith_pd_worker,
                 "concurrent faith_pd_inmem");
 
     // ---- seeded ordination, concurrent ---------------------------------

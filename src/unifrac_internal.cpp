@@ -24,13 +24,12 @@
 
 #include "unifrac_internal.hpp"
 
-/* CPU_SETSIZE sizes the progress-report flag array below. It is a historical
- * choice -- the flags are indexed by task id, which is bounded by the stripe
- * count and not by any CPU count -- so try_report() drops reports for task ids
- * at or above it rather than running off the end.
+/* CPU_SETSIZE sizes the progress-report flag array below -- a historical
+ * choice, since the flags are indexed by task id, which is bounded by the
+ * stripe count and not by any CPU count.
  *
- * Note for the fallbacks: 32 is small relative to the task ids a large table
- * can produce, and UNIFRAC_WASM is also set for the native libssu_inmem.a build
+ * The fallback value of 32 is small relative to the task ids a large table can
+ * produce, and UNIFRAC_WASM is also set for the native libssu_inmem.a build
  * (see inmem_build.mk), which is genuinely multi-threaded. That is harmless
  * today only because register_report_status() installs no handler there, so no
  * flag is ever set. Wiring up an API-driven progress poll for embedders would
@@ -51,14 +50,10 @@ static pthread_mutex_t printf_mutex = PTHREAD_MUTEX_INITIALIZER;
  * handler and cleared by the task that reports.
  *
  * Statically allocated on purpose: several computes may be in flight in one
- * process (each brackets itself with register_report_status()), so this state
- * must not be allocated or freed per compute -- doing so used to hand one
- * compute a dangling pointer while another was still reading it.
- *
- * Zero-initialized as static storage, so no runtime setup is needed. Accessed
- * with relaxed ordering: each flag is a standalone notification that orders
- * nothing else, so this compiles to the same plain load/store as the bool
- * array it replaces.
+ * process, so this state must not be allocated or freed per compute -- doing so
+ * used to hand one compute a dangling pointer while another was still reading
+ * it. Relaxed ordering: each flag is a standalone notification that orders
+ * nothing else, so it compiles to a plain load/store with no lock prefix.
  */
 static std::atomic<bool> report_status[CPU_SETSIZE];
 static_assert(std::atomic<bool>::is_always_lock_free,
@@ -108,9 +103,6 @@ void su::try_report(const su::task_parameters* task_p, unsigned int k, unsigned 
 
 void su::register_report_status() {
 #ifndef UNIFRAC_WASM
-    // Register a signal handler so we can ask a running compute for its
-    // progress. The disposition is process-wide, so install it exactly once
-    // however many computes come and go.
     static std::atomic<bool> handler_installed(false);
     if (!handler_installed.exchange(true)) {
         if (signal(SIGUSR1, sig_handler) == SIG_ERR)
