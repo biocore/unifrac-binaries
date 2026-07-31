@@ -2221,10 +2221,17 @@ void test_concurrent_permanova_inmem() {
     ASSERT(ref_fstat > 0.0);
     ASSERT(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
 
-    // the reference call above settled the accelerator choice, so this is stable
+    /* The reference call above settled the accelerator choice, so this is
+     * stable. Log it unconditionally: on the linux-gpu-cuda runner detection is
+     * intermittent between processes within one job -- the same test_su_api
+     * binary reported "NVIDIA GPU detected" on run 30652784446 and "not
+     * detected" on 30656219910 -- so a green run does not by itself say which
+     * path this suite took.
+     */
     const bool check_pvalue = permanova_pvalue_is_reproducible();
-    if (!check_pvalue)
-        printf("NOTE: skbb is on an accelerator; checking fstat only, not the p-value\n");
+    printf("NOTE: skbb acc mode %u; p-value %s\n", skbb_get_acc_mode(),
+           check_pvalue ? "checked"
+                        : "not checked, see scikit-bio/scikit-bio-binaries#15");
 
     run_workers([&](outcome* o) {
         permanova_worker(dm->matrix, dm->n_samples, ref_fstat, ref_pvalue, check_pvalue, o);
