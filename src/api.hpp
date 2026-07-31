@@ -27,13 +27,23 @@
  * -----------
  * Several computes may be in flight in one process, with limits. In short:
  * one_off_matrix_inmem_v4 / _fp32_v4 with seed >= 0 (or subsample_depth == 0),
- * faith_pd_inmem, and subsample_table_inmem_seeded with seed >= 0 may be called
- * concurrently; input tables and trees are read-only and may be shared.
+ * faith_pd_inmem, subsample_table_inmem_seeded, pcoa_seeded / pcoa_fp32_seeded /
+ * pcoa_mixed_seeded, and compute_permanova_inmem_fp64_seeded / _fp32_seeded --
+ * each with seed >= 0 -- may be called concurrently; input tables, trees and
+ * distance matrices are read-only and may be shared.
  *
- * ssu_set_random_seed, any seed < 0 while subsampling, and the pcoa* /
- * compute_permanova_inmem_* entry points all go through process-global RNG state
- * and may not. GPU/ACC builds are not covered. Accelerator detection caches race
- * benignly on the first call, which a sanitizer will notice.
+ * ssu_set_random_seed, and any of the above at seed < 0, go through
+ * process-global RNG state and may not. That includes every non-seeded form,
+ * which is defined as passing seed = -1: subsample_table_inmem, pcoa, pcoa_fp32,
+ * pcoa_mixed, compute_permanova_inmem_fp64 / _fp32. GPU/ACC builds are not
+ * covered. Accelerator detection caches race benignly on the first call, which a
+ * sanitizer will notice.
+ *
+ * Concurrent results are bit-identical to serial ones for the unifrac matrix
+ * itself. The ordination entry points reproduce to a tight tolerance rather than
+ * bit-exactly (~1e-15 observed on a 6-sample matrix): their parallel reductions
+ * are not order-pinned, so a compute competing with others drifts by ULPs. See
+ * the note on compute_permanova_inmem_*_seeded for how that lands on a p-value.
  *
  * Thread count is OpenMP's, and omp_set_num_threads() is scoped to the calling
  * task, so each caller can pick its own width without serializing.
@@ -797,6 +807,30 @@ EXTERN ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int
                                                   unsigned int permanova_perms,
                                                   float *fstat, float *pvalue);
 
+/* Per-call-seeded variants of compute_permanova_inmem_fp64/fp32. Equivalent to
+ * the non-seeded forms but accept an explicit `seed` governing the permutation
+ * draw, sidestepping the global RNG so concurrent PERMANOVAs no longer need an
+ * external mutex. seed >= 0 draws from a generator local to the call; seed < 0
+ * falls back to the global RNG, making the non-seeded API equivalent to passing
+ * seed = -1.
+ *
+ * Note that reproducibility is to a tolerance, not bit-exact: the F statistic
+ * is accumulated by parallel reductions whose order is not pinned, so it drifts
+ * by ULPs, and a p-value can shift with it when the observed F sits near a
+ * permutation-tail boundary.
+ */
+EXTERN ComputeStatus compute_permanova_inmem_fp64_seeded(const double *mat, unsigned int n_dims,
+                                                         const uint32_t *grouping,
+                                                         unsigned int permanova_perms,
+                                                         int seed,
+                                                         double *fstat, double *pvalue);
+
+EXTERN ComputeStatus compute_permanova_inmem_fp32_seeded(const float *mat, unsigned int n_dims,
+                                                         const uint32_t *grouping,
+                                                         unsigned int permanova_perms,
+                                                         int seed,
+                                                         float *fstat, float *pvalue);
+
 /* Write a matrix object using the text format
  *
  * filename <const char*> the file to write into
@@ -1168,6 +1202,15 @@ void find_eigens_fast_p32(const uint32_t n_samples, const uint32_t n_dims,float 
 void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double **eigenvalues, double **samples, double **proportion_explained);
 void pcoa_fp32(const float * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
 void pcoa_mixed(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
+
+// Per-call-seeded variants of the three above. The randomized SVD needs a
+// random matrix; seed >= 0 draws it from a generator local to the call, so the
+// result is reproducible and no process-global RNG state is touched -- which is
+// what lets several PCoAs run at once. seed < 0 falls back to the global RNG,
+// making the non-seeded forms equivalent to passing seed = -1.
+void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double **eigenvalues, double **samples, double **proportion_explained);
+void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
+void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
 
 
 #ifdef __cplusplus

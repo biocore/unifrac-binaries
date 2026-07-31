@@ -35,18 +35,29 @@ void find_eigens_fast(const uint32_t n_samples, const uint32_t n_dims, float  * 
 // eigenvalues - out, alocated buffer of size n_dims
 // samples     - out, alocated buffer of size n_dims x n_samples
 // proportion_explained - out, allocated buffer of size n_dims
-void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained);
-void pcoa(const float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained);
-void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained);
+// seed      - in, if >= 0, the randomized SVD draws from a generator local to
+//             this call, so the result is reproducible and the call touches no
+//             shared random state. If < 0 (the default, and what every caller
+//             did before the parameter existed) the draw comes from the
+//             dependency's process-global generator, which set_random_seed()
+//             seeds -- reproducible only if no other thread is drawing.
+void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained, int seed = -1);
+void pcoa(const float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained, int seed = -1);
+void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained, int seed = -1);
 
 // in-place version, will use mat as temp buffer internally
-void pcoa_inplace(double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained);
-void pcoa_inplace(float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained);
+// Takes the same seed for uniformity, but note there is no seeded entry point
+// in api.hpp reaching it: its only caller is the HDF5 writer path, which
+// computes PCoA on the way to a file and passes the default. A public seeded
+// form would be the same shape as pcoa_seeded if one is ever wanted.
+void pcoa_inplace(double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained, int seed = -1);
+void pcoa_inplace(float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained, int seed = -1);
 
 
 // Compute Permanova
-void permanova(const double * mat, unsigned int n_dims, const uint32_t *grouping, unsigned int n_perm, double &fstat_out, double &pvalue_out);
-void permanova(const float  * mat, unsigned int n_dims, const uint32_t *grouping, unsigned int n_perm, float  &fstat_out, float  &pvalue_out);
+// seed - in, same meaning as for pcoa, governing the permutation draw
+void permanova(const double * mat, unsigned int n_dims, const uint32_t *grouping, unsigned int n_perm, double &fstat_out, double &pvalue_out, int seed = -1);
+void permanova(const float  * mat, unsigned int n_dims, const uint32_t *grouping, unsigned int n_perm, float  &fstat_out, float  &pvalue_out, int seed = -1);
 
 // biom_subsampled using the internal random generator
 class skbio_biom_subsampled : public biom_subsampled {

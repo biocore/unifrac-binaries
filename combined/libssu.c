@@ -470,6 +470,29 @@ ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims
    return (*dl_compute_permanova_inmem_fp32)(mat, n_dims, grouping, permanova_perms, fstat, pvalue);
 }
 
+static ComputeStatus (*dl_compute_permanova_inmem_fp64_seeded)(const double*, unsigned int, const uint32_t*, unsigned int, int, double*, double*) = NULL;
+static ComputeStatus (*dl_compute_permanova_inmem_fp32_seeded)(const float*, unsigned int, const uint32_t*, unsigned int, int, float*, float*) = NULL;
+
+ComputeStatus compute_permanova_inmem_fp64_seeded(const double *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  int seed,
+                                                  double *fstat, double *pvalue) {
+   cond_ssu_load("compute_permanova_inmem_fp64_seeded", (void **) &dl_compute_permanova_inmem_fp64_seeded);
+
+   return (*dl_compute_permanova_inmem_fp64_seeded)(mat, n_dims, grouping, permanova_perms, seed, fstat, pvalue);
+}
+
+ComputeStatus compute_permanova_inmem_fp32_seeded(const float *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  int seed,
+                                                  float *fstat, float *pvalue) {
+   cond_ssu_load("compute_permanova_inmem_fp32_seeded", (void **) &dl_compute_permanova_inmem_fp32_seeded);
+
+   return (*dl_compute_permanova_inmem_fp32_seeded)(mat, n_dims, grouping, permanova_perms, seed, fstat, pvalue);
+}
+
 /*********************************************************************/
 
 static IOStatus (*dl_write_mat)(const char*, mat_t*) = NULL;

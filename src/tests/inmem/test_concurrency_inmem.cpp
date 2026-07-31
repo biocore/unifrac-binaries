@@ -146,6 +146,76 @@ static void faith_pd_worker(outcome* out) {
     }
 }
 
+/* Ordination under the same treatment. These entry points are declared outside
+ * every UNIFRAC_WASM guard, so they compile into this archive -- but nothing
+ * proved they link and run in it until this ran here. The suite in test_su.cpp
+ * covers them only as built for libssu.so.
+ *
+ * Reproducibility is to a tolerance, not bit-exact: the randomized SVD
+ * accumulates through parallel reductions whose order is not pinned, so a run
+ * competing with others drifts by ULPs. The bound is still far tighter than the
+ * signal -- changing the seed moves the answer by ~0.5 on this fixture.
+ */
+static const int          ORD_SEED   = 7;
+static const unsigned int PCOA_DIMS  = 3;   // < n_samples (6)
+static const unsigned int PERM_PERMS = 99;
+static const double       PCOA_TOL   = 1e-12;
+
+static bool run_pcoa(std::vector<double> &out, int seed) {
+    double *ev = NULL, *sa = NULL, *pe = NULL;
+    pcoa_seeded(FIXTURE_UNWEIGHTED_DIST, FIXTURE_N_SAMP, PCOA_DIMS, seed, &ev, &sa, &pe);
+    if (ev == NULL || sa == NULL || pe == NULL) return false;
+
+    out.clear();
+    out.insert(out.end(), ev, ev + PCOA_DIMS);
+    out.insert(out.end(), sa, sa + (size_t(PCOA_DIMS) * FIXTURE_N_SAMP));
+    out.insert(out.end(), pe, pe + PCOA_DIMS);
+    free(ev);
+    free(sa);
+    free(pe);
+    return true;
+}
+
+static void pcoa_worker(const std::vector<double>* reference, outcome* out) {
+    for (unsigned int i = 0; i < N_ITERS; i++) {
+        std::vector<double> got;
+        if (!run_pcoa(got, ORD_SEED)) {
+            out->n_status++;
+            continue;
+        }
+        if (got.size() != reference->size()) {
+            out->n_mismatch++;
+        } else {
+            for (size_t j = 0; j < got.size(); j++) {
+                if (std::fabs(got[j] - (*reference)[j]) > PCOA_TOL) {
+                    out->n_mismatch++;
+                    break;
+                }
+            }
+        }
+        out->n_ok++;
+    }
+}
+
+/* A p-value is a rank in the permutation distribution, so ULP drift in the
+ * observed F does not perturb it smoothly -- it either does not move, or steps
+ * by 1/n_perm. Same bound the native suites use on the same quantity.
+ */
+static void permanova_worker(double ref_fstat, double ref_pvalue, outcome* out) {
+    for (unsigned int i = 0; i < N_ITERS; i++) {
+        double fstat = 0.0, pvalue = 0.0;
+        if (compute_permanova_inmem_fp64_seeded(FIXTURE_UNWEIGHTED_DIST, FIXTURE_N_SAMP,
+                                                FIXTURE_GROUPING, PERM_PERMS, ORD_SEED,
+                                                &fstat, &pvalue) != okay) {
+            out->n_status++;
+            continue;
+        }
+        if (std::fabs(fstat - ref_fstat) > 1e-6 || std::fabs(pvalue - ref_pvalue) > 1e-2)
+            out->n_mismatch++;
+        out->n_ok++;
+    }
+}
+
 static void check_all(const std::vector<outcome> &results, const char* what) {
     for (unsigned int t = 0; t < results.size(); t++) {
         if (results[t].n_status != 0 || results[t].n_mismatch != 0 ||
@@ -207,6 +277,36 @@ int main(void) {
     // ---- faith_pd, concurrent ------------------------------------------
     run_workers([](outcome* o) { faith_pd_worker(o); },
                 "concurrent faith_pd_inmem");
+
+    // ---- seeded ordination, concurrent ---------------------------------
+    std::vector<double> pcoa_reference;
+    CHECK(run_pcoa(pcoa_reference, ORD_SEED));
+
+    // the seed is really consumed: a different one moves the answer far more
+    // than the tolerance above
+    {
+        std::vector<double> other;
+        CHECK(run_pcoa(other, ORD_SEED + 1));
+        double m = 0.0;
+        for (size_t j = 0; j < pcoa_reference.size(); j++)
+            m = std::max(m, std::fabs(pcoa_reference[j] - other[j]));
+        CHECK(m > 1e-6);
+    }
+
+    run_workers([&pcoa_reference](outcome* o) { pcoa_worker(&pcoa_reference, o); },
+                "concurrent pcoa_seeded");
+
+    double ref_fstat = 0.0, ref_pvalue = 0.0;
+    CHECK(compute_permanova_inmem_fp64_seeded(FIXTURE_UNWEIGHTED_DIST, FIXTURE_N_SAMP,
+                                              FIXTURE_GROUPING, PERM_PERMS, ORD_SEED,
+                                              &ref_fstat, &ref_pvalue) == okay);
+    CHECK(ref_fstat > 0.0);
+    CHECK(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
+
+    run_workers([ref_fstat, ref_pvalue](outcome* o) {
+                    permanova_worker(ref_fstat, ref_pvalue, o);
+                },
+                "concurrent compute_permanova_inmem_fp64_seeded");
 
     // ---- n_substeps outside the stripe range ---------------------------
     /* 6 samples -> 3 stripes. 0 used to divide by zero and 4 used to run off

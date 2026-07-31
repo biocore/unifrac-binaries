@@ -2121,6 +2121,173 @@ void test_concurrent_faith_pd_inmem() {
     SUITE_END();
 }
 
+/* PCoA and PERMANOVA also draw from an RNG -- the randomized SVD needs a random
+ * matrix, and PERMANOVA needs its permutations. Without a per-call seed both
+ * draw from the dependency's process-global generator, which no caller can hold
+ * still while another one runs. The seeded entry points take a generator local
+ * to the call instead, which is what these tests pin.
+ */
+namespace concurrency_fixture {
+    static const int          ORD_SEED   = 7;
+    static const unsigned int PCOA_DIMS  = 3;   // < n_samples (6)
+    static const unsigned int PERM_PERMS = 99;
+
+    /* Unlike the unifrac matrix itself, a concurrent PCoA is NOT bit-identical
+     * to the serial one. The randomized SVD accumulates through parallel
+     * reductions whose order is not pinned, so a run competing with three
+     * others drifts: measured at 2.8e-16 max on this fixture, with most but not
+     * all iterations landing bit-exact.
+     *
+     * That drift is four orders of magnitude below what this test needs to
+     * detect. If the seed were not local to the call -- the bug being fixed --
+     * concurrent callers would be drawing from a generator the others are
+     * moving, and the answers would differ by ~0.5 on this fixture, which is
+     * the scale test_pcoa_seeded pins directly.
+     */
+    static const double PCOA_TOL = 1e-12;
+
+    static void pcoa_worker(const double *dm, unsigned int n_samples,
+                            const std::vector<double>* reference, outcome* out) {
+        for (unsigned int i = 0; i < N_ITERS; i++) {
+            double *eigenvalues = NULL, *samples = NULL, *proportion_explained = NULL;
+            pcoa_seeded(dm, n_samples, PCOA_DIMS, ORD_SEED,
+                        &eigenvalues, &samples, &proportion_explained);
+            if (eigenvalues == NULL || samples == NULL || proportion_explained == NULL) {
+                out->n_status++;
+                continue;
+            }
+            std::vector<double> got;
+            got.insert(got.end(), eigenvalues, eigenvalues + PCOA_DIMS);
+            got.insert(got.end(), samples, samples + (size_t(PCOA_DIMS) * n_samples));
+            got.insert(got.end(), proportion_explained, proportion_explained + PCOA_DIMS);
+            free(eigenvalues);
+            free(samples);
+            free(proportion_explained);
+
+            if (got.size() != reference->size()) {
+                out->n_mismatch++;
+            } else {
+                for (size_t j = 0; j < got.size(); j++) {
+                    if (fabs(got[j] - (*reference)[j]) > PCOA_TOL) {
+                        out->n_mismatch++;
+                        break;
+                    }
+                }
+            }
+            out->n_ok++;
+        }
+    }
+
+    /* PERMANOVA is checked to a tolerance rather than bit-exactly: the
+     * unpermuted F is accumulated by parallel reductions whose order is not
+     * pinned, so it drifts by ULPs run to run, and a p-value can shift with it
+     * when the observed F sits near a permutation-tail boundary. Same reasoning
+     * -- and the same tolerances -- as test_permanova_inmem above. What is being
+     * tested here is that concurrent callers get their own seeded draw, which a
+     * shared global generator would break far more loudly than 1e-2.
+     */
+    static void permanova_worker(const double *dm, unsigned int n_samples,
+                                 const uint32_t *grouping,
+                                 double ref_fstat, double ref_pvalue, outcome* out) {
+        for (unsigned int i = 0; i < N_ITERS; i++) {
+            double fstat = 0.0, pvalue = 0.0;
+            if (compute_permanova_inmem_fp64_seeded(dm, n_samples, grouping, PERM_PERMS,
+                                                    ORD_SEED, &fstat, &pvalue) != okay) {
+                out->n_status++;
+                continue;
+            }
+            if (fabs(fstat - ref_fstat) > 1e-6 || fabs(pvalue - ref_pvalue) > 1e-2)
+                out->n_mismatch++;
+            out->n_ok++;
+        }
+    }
+
+    // the distance matrix both ordination tests run on
+    static mat_full_fp64_t* ordination_dm() {
+        using namespace inmem_fixture;
+        const support_biom_t   table = {(char**) OBS_IDS, (char**) SAMP_IDS,
+                                        INDICES, INDPTR, DATA, (int) N_OBS, (int) N_SAMP, 0};
+        const support_bptree_t tree  = {STRUCTURE, LENGTHS, (char**) NAMES, (int) NPARENS};
+
+        mat_full_fp64_t* dm = NULL;
+        ASSERT(one_off_matrix_inmem_v4(&table, &tree, "unweighted_fp64",
+                                       false, 1.0, false, true, 1, 0, false, -1,
+                                       NULL, &dm) == okay);
+        ASSERT(dm != NULL);
+        return dm;
+    }
+}
+
+void test_concurrent_pcoa() {
+    SUITE_START("test concurrent pcoa_seeded");
+
+    using namespace concurrency_fixture;
+
+    mat_full_fp64_t* dm = ordination_dm();
+
+    // serial reference at the same seed
+    std::vector<double> reference;
+    {
+        double *eigenvalues = NULL, *samples = NULL, *proportion_explained = NULL;
+        pcoa_seeded(dm->matrix, dm->n_samples, PCOA_DIMS, ORD_SEED,
+                    &eigenvalues, &samples, &proportion_explained);
+        ASSERT(eigenvalues != NULL);
+        ASSERT(samples != NULL);
+        ASSERT(proportion_explained != NULL);
+        reference.insert(reference.end(), eigenvalues, eigenvalues + PCOA_DIMS);
+        reference.insert(reference.end(), samples, samples + (size_t(PCOA_DIMS) * dm->n_samples));
+        reference.insert(reference.end(), proportion_explained, proportion_explained + PCOA_DIMS);
+        free(eigenvalues);
+        free(samples);
+        free(proportion_explained);
+    }
+
+    std::vector<outcome> results(N_THREADS);
+    std::vector<std::thread> workers;
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers.emplace_back(pcoa_worker, dm->matrix, dm->n_samples,
+                             &reference, &results[t]);
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers[t].join();
+
+    check(results, N_ITERS);
+
+    destroy_mat_full_fp64(&dm);
+
+    SUITE_END();
+}
+
+void test_concurrent_permanova_inmem() {
+    SUITE_START("test concurrent compute_permanova_inmem_fp64_seeded");
+
+    using namespace concurrency_fixture;
+    using namespace inmem_fixture;
+
+    mat_full_fp64_t* dm = ordination_dm();
+
+    // serial reference at the same seed
+    double ref_fstat = 0.0, ref_pvalue = 0.0;
+    ASSERT(compute_permanova_inmem_fp64_seeded(dm->matrix, dm->n_samples, GROUPING,
+                                               PERM_PERMS, ORD_SEED,
+                                               &ref_fstat, &ref_pvalue) == okay);
+    ASSERT(ref_fstat > 0.0);
+    ASSERT(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
+
+    std::vector<outcome> results(N_THREADS);
+    std::vector<std::thread> workers;
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers.emplace_back(permanova_worker, dm->matrix, dm->n_samples, GROUPING,
+                             ref_fstat, ref_pvalue, &results[t]);
+    for (unsigned int t = 0; t < N_THREADS; t++)
+        workers[t].join();
+
+    check(results, N_ITERS);
+
+    destroy_mat_full_fp64(&dm);
+
+    SUITE_END();
+}
+
 /* A subsampled compute draws from an RNG. Passing the seed per call is what
  * makes a reproducible subsampled compute possible without holding a lock
  * across seed-then-compute: the alternative, ssu_set_random_seed() followed by a
@@ -2907,6 +3074,8 @@ int main(int argc, char** argv) {
     test_concurrent_matrix_inmem();
     test_concurrent_matrix_inmem_seeded();
     test_concurrent_faith_pd_inmem();
+    test_concurrent_pcoa();
+    test_concurrent_permanova_inmem();
     // must stay last; see the comment on the function
     test_concurrent_matrix_inmem_reporting();
 

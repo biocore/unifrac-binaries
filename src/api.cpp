@@ -1074,22 +1074,43 @@ void destroy_subsampled_inmem(opaque_biom_inmem_t **t) {
     delete sub;
 }
 
+compute_status compute_permanova_inmem_fp64_seeded(const double *mat, unsigned int n_dims,
+                                                    const uint32_t *grouping,
+                                                    unsigned int permanova_perms,
+                                                    int seed,
+                                                    double *fstat, double *pvalue) {
+    if (mat == NULL || grouping == NULL) return grouping_missing;
+    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue, seed);
+    return okay;
+}
+
+compute_status compute_permanova_inmem_fp32_seeded(const float *mat, unsigned int n_dims,
+                                                    const uint32_t *grouping,
+                                                    unsigned int permanova_perms,
+                                                    int seed,
+                                                    float *fstat, float *pvalue) {
+    if (mat == NULL || grouping == NULL) return grouping_missing;
+    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue, seed);
+    return okay;
+}
+
+/* The non-seeded forms predate the per-call seed, so they take the global-RNG
+ * path (seed < 0), which is what they have always done.
+ */
 compute_status compute_permanova_inmem_fp64(const double *mat, unsigned int n_dims,
                                              const uint32_t *grouping,
                                              unsigned int permanova_perms,
                                              double *fstat, double *pvalue) {
-    if (mat == NULL || grouping == NULL) return grouping_missing;
-    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
-    return okay;
+    return compute_permanova_inmem_fp64_seeded(mat, n_dims, grouping, permanova_perms,
+                                               -1, fstat, pvalue);
 }
 
 compute_status compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims,
                                              const uint32_t *grouping,
                                              unsigned int permanova_perms,
                                              float *fstat, float *pvalue) {
-    if (mat == NULL || grouping == NULL) return grouping_missing;
-    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
-    return okay;
+    return compute_permanova_inmem_fp32_seeded(mat, n_dims, grouping, permanova_perms,
+                                               -1, fstat, pvalue);
 }
 
 /*
@@ -2783,15 +2804,30 @@ void find_eigens_fast_fp32(const uint32_t n_samples, const uint32_t n_dims, floa
 // samples     - out, alocated buffer of size n_dims x n_samples
 // proportion_explained - out, allocated buffer of size n_dims
 
+void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double * *eigenvalues, double * *samples, double * *proportion_explained) {
+  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained, seed);
+}
+
+void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained) {
+  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained, seed);
+}
+
+void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained) {
+  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained, seed);
+}
+
+/* The non-seeded forms predate the per-call seed, so they take the global-RNG
+ * path (seed < 0), which is what they have always done.
+ */
 void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double * *eigenvalues, double * *samples, double * *proportion_explained) {
-  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained);
+  pcoa_seeded(mat, n_samples, n_dims, -1, eigenvalues, samples, proportion_explained);
 }
 
 void pcoa_fp32(const float * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained) {
-  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained);
+  pcoa_fp32_seeded(mat, n_samples, n_dims, -1, eigenvalues, samples, proportion_explained);
 }
 
 void pcoa_mixed(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained) {
-  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained);
+  pcoa_mixed_seeded(mat, n_samples, n_dims, -1, eigenvalues, samples, proportion_explained);
 }
 

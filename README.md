@@ -220,10 +220,14 @@ concurrent computes there share one device and one default queue.
 - `faith_pd_inmem`.
 - `subsample_table_inmem_seeded` with `seed >= 0`, and the `subsampled_*`
   accessors on distinct objects.
+- `pcoa_seeded`, `pcoa_fp32_seeded`, `pcoa_mixed_seeded`,
+  `compute_permanova_inmem_fp64_seeded` and `compute_permanova_inmem_fp32_seeded`,
+  each with `seed >= 0`. See the note on ordination reproducibility below.
 
 The input `support_biom_t` arrays and `support_bptree_t` topology are read, never
-written, so concurrent calls may share them. Each call allocates its own result;
-`destroy_*` is safe on distinct results.
+written, so concurrent calls may share them — as is the distance matrix handed to
+the ordination entry points. Each call allocates its own result; `destroy_*` is
+safe on distinct results.
 
 **Not safe to call concurrently — these use process-global state:**
 
@@ -233,19 +237,36 @@ written, so concurrent calls may share them. Each call allocates its own result;
   are *two* chained process-global generators here, not one: `ssu_set_random_seed`
   reseeds this library's `std::mt19937`, then consumes one draw from it to derive
   a seed for scikit-bio-binaries' own separate global generator. So any other
-  RNG-consuming call that lands in between — including any `pcoa*` or
-  `permanova*` call, since those always draw — desynchronizes the sequence and
-  silently breaks reproducibility, even single-threaded.
+  call that draws from those generators and lands in between — including any
+  `pcoa*` or `permanova*` call made with `seed < 0` — desynchronizes the
+  sequence and silently breaks reproducibility, even single-threaded. The
+  `_seeded` forms at `seed >= 0` do not draw from either generator and so do not
+  perturb it.
 - `pcoa`, `pcoa_fp32`, `pcoa_mixed`, `compute_permanova_inmem_fp64` and
-  `compute_permanova_inmem_fp32`. These pass `seed = -1` down to
-  scikit-bio-binaries, which then draws from *its* process-global generator. If
-  you need concurrent ordination today, call `skbb_pcoa_fsvd_*` directly with a
-  non-negative seed: that path takes a per-call seed and touches no shared state.
-  `skbb_permanova_*` with a non-negative seed likewise avoids the generator, but
-  on x86_64 builds it still consults a lazily-cached CPU-dispatch flag, which
-  falls under the note on detection caches below.
+  `compute_permanova_inmem_fp32`. These are defined as their `_seeded` form at
+  `seed = -1`, which passes `-1` down to scikit-bio-binaries, which then draws
+  from *its* process-global generator. Use the `_seeded` entry points with a
+  non-negative seed instead; that path builds a generator local to the call and
+  touches no shared state.
 - The file-writing entry points (`unifrac_to_file*`, `write_mat*`): they compute
   PCoA internally with `seed = -1` and write to a caller-supplied path.
+- `find_eigens_fast` / `find_eigens_fast_fp32`, which still pass `seed = -1`
+  unconditionally. They were left alone deliberately: `pcoa*_seeded` covers the
+  ordination use case, and nothing in this repository calls the eigen entry
+  points directly. Threading a seed through them is the same two-line change if
+  a consumer needs it.
+
+**Ordination reproduces to a tolerance, not bit-exactly.** Where a concurrent
+`one_off_matrix_inmem_*` is bit-identical to the serial answer, a concurrent
+`pcoa*_seeded` is not: the randomized SVD accumulates through parallel reductions
+whose order is not pinned, so a compute competing with others drifts by ULPs
+(2.8e-16 measured on the 6-sample fixture, against a signal of ~0.5 for a changed
+seed). For PERMANOVA the same drift lands differently — a p-value is a rank in
+the permutation distribution, so it either does not move or steps by `1/n_perm`
+when the observed F crosses a neighbouring permutation. Treat a seeded ordination
+as reproducible, not as a bitwise cache key. On x86_64, `skbb_permanova_*` also
+consults a lazily-cached CPU-dispatch flag regardless of seed, which falls under
+the note on detection caches below.
 
 **A seeded subsample reproduces per thread count, not across thread counts.**
 `subsample_depth > 0` distributes the draw across the OpenMP team: one generator

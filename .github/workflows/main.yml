@@ -183,8 +183,16 @@ jobs:
         # the archive must actually export what embedders call, including the
         # seeded v4 entries -- a dropped TU would otherwise surface downstream
         for sym in one_off_matrix_inmem_fp32_v3 one_off_matrix_inmem_fp32_v4 \
-                   one_off_matrix_inmem_v3 one_off_matrix_inmem_v4 faith_pd_inmem; do
+                   one_off_matrix_inmem_v3 one_off_matrix_inmem_v4 faith_pd_inmem \
+                   compute_permanova_inmem_fp64_seeded \
+                   compute_permanova_inmem_fp32_seeded; do
           nm -g --defined-only libssu_inmem.a | grep -q " T ${sym}$" \
+            || { echo "MISSING SYMBOL: ${sym}"; exit 2; }
+        done
+        # pcoa_seeded and friends are plain C++ linkage, not EXTERN, so they
+        # carry mangled names -- check them demangled
+        for sym in pcoa_seeded pcoa_fp32_seeded pcoa_mixed_seeded; do
+          nm -gC --defined-only libssu_inmem.a | grep -q " T ${sym}(" \
             || { echo "MISSING SYMBOL: ${sym}"; exit 2; }
         done
         popd
