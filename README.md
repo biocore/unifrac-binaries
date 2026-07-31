@@ -203,6 +203,72 @@ To restrict the number of cores used, set:
 
     export OMP_NUM_THREADS=nthreads
 
+## Calling the library concurrently
+
+The `ssu` and `faithpd` tools run one compute at a time, but the shared library
+can be loaded into a host process — a server, a notebook session — that wants
+several independent computes in flight at once. This section is the contract for
+that case. It applies to the CPU builds; **GPU/ACC builds are not covered**, as
+concurrent computes there share one device and one default queue.
+
+**Safe to call concurrently from several threads of one process:**
+
+- `one_off_matrix_inmem_v4` / `one_off_matrix_inmem_fp32_v4` with `seed >= 0`,
+  or with `subsample_depth == 0` (no subsampling means nothing is drawn).
+- `one_off_matrix_inmem_v3` / `_fp32_v3` / `_v2`, and `one_off_inmem*`, with
+  `subsample_depth == 0`.
+- `faith_pd_inmem`.
+- `subsample_table_inmem_seeded` with `seed >= 0`, and the `subsampled_*`
+  accessors on distinct objects.
+
+The input `support_biom_t` arrays and `support_bptree_t` topology are read, never
+written, so concurrent calls may share them. Each call allocates its own result;
+`destroy_*` is safe on distinct results.
+
+**Not safe to call concurrently — these use process-global state:**
+
+- `ssu_set_random_seed`, and any entry point given `seed < 0` while
+  `subsample_depth > 0`. Pass a non-negative `seed` to a `_v4` entry point
+  instead of seeding globally; that is the whole reason `_v4` exists. Note there
+  are *two* chained process-global generators here, not one: `ssu_set_random_seed`
+  reseeds this library's `std::mt19937`, then consumes one draw from it to derive
+  a seed for scikit-bio-binaries' own separate global generator. So any other
+  RNG-consuming call that lands in between — including any `pcoa*` or
+  `permanova*` call, since those always draw — desynchronizes the sequence and
+  silently breaks reproducibility, even single-threaded.
+- `pcoa`, `pcoa_fp32`, `pcoa_mixed`, `compute_permanova_inmem_fp64` and
+  `compute_permanova_inmem_fp32`. These pass `seed = -1` down to
+  scikit-bio-binaries, which then draws from *its* process-global generator. If
+  you need concurrent ordination today, call `skbb_pcoa_fsvd_*` directly with a
+  non-negative seed: that path takes a per-call seed and touches no shared state.
+  `skbb_permanova_*` with a non-negative seed likewise avoids the generator, but
+  on x86_64 builds it still consults a lazily-cached CPU-dispatch flag, which
+  falls under the note on detection caches below.
+- The file-writing entry points (`unifrac_to_file*`, `write_mat*`): they compute
+  PCoA internally with `seed = -1` and write to a caller-supplied path.
+
+**Detection caches.** The first call into a compute lazily fills a non-atomic
+`static int` recording which accelerator and CPU variant to use (`proc_use_acc`
+in `src/unifrac.cpp`, `skbio_use_acc` in `src/skbio_alt.cpp`, plus an equivalent
+in the dependency). Concurrent first calls therefore race on it. It is benign in
+practice — detection is a pure function of the environment, so every racing
+writer stores the same value — but a sanitizer build will flag it, and if
+`UNIFRAC_GPU_INFO` or `UNIFRAC_CPU_INFO` is set, the informational lines from
+concurrent first calls can interleave on stdout.
+
+**Choosing a thread count per call.** There is no `n_threads` argument; fan-out
+is OpenMP's. `omp_set_num_threads()` sets `nthreads-var`, which the OpenMP spec
+scopes to the calling task, so **each of your threads can pick its own width
+without disturbing the others** — set it on the calling thread rather than
+serializing calls to protect it. Note that W concurrent computes each get their
+own team, so choose widths that sum to the cores you have rather than letting
+each default to all of them.
+
+**SIGUSR1.** On non-WASM builds the first compute installs a `SIGUSR1` handler
+for progress reporting and never restores the previous disposition. If that
+matters to your host process, install your handler after the first compute, or
+build the in-memory subset, which omits signal handling entirely.
+
 ## Older CPU support
 
 On Linux platforms, Unifrac will auto-detect the CPU generation, i.e. if it supports avx or avx2 vector instructions.

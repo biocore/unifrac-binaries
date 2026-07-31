@@ -1,3 +1,6 @@
+#ifndef __UNIFRAC_API_H
+#define __UNIFRAC_API_H 1
+
 #include "task_parameters.hpp"
 #include "status_enum.hpp"
 
@@ -13,10 +16,29 @@
 
 /*
  *
- * Note: Each function declared EXTERN must both have 
+ * Note: Each function declared EXTERN must both have
  *       an implementation in api.cpp, AND
  *       a wrapper in ../combined/libssu.c
  *
+ */
+
+/*
+ * Concurrency
+ * -----------
+ * Several computes may be in flight in one process, with limits. In short:
+ * one_off_matrix_inmem_v4 / _fp32_v4 with seed >= 0 (or subsample_depth == 0),
+ * faith_pd_inmem, and subsample_table_inmem_seeded with seed >= 0 may be called
+ * concurrently; input tables and trees are read-only and may be shared.
+ *
+ * ssu_set_random_seed, any seed < 0 while subsampling, and the pcoa* /
+ * compute_permanova_inmem_* entry points all go through process-global RNG state
+ * and may not. GPU/ACC builds are not covered. Accelerator detection caches race
+ * benignly on the first call, which a sanitizer will notice.
+ *
+ * Thread count is OpenMP's, and omp_set_num_threads() is scoped to the calling
+ * task, so each caller can pick its own width without serializing.
+ *
+ * See "Calling the library concurrently" in README.md for the full contract.
  */
 
 #define PARTIAL_MAGIC "SSU-PARTIAL-01"
@@ -1160,3 +1182,5 @@ void set_tasks(std::vector<su::task_parameters> &tasks,
                unsigned int n_tasks);
 
 #endif
+
+#endif /* __UNIFRAC_API_H */
