@@ -2159,9 +2159,10 @@ namespace concurrency_fixture {
      * PVALUE_TOL. fstat is index 0, which is copied back correctly, so it stays
      * asserted in every configuration.
      *
-     * Reported upstream. Drop this gate once skbb sizes that buffer n_perm+1.
-     * Must be called after a compute has gone through skbio_check_acc(), which
-     * is what forces skbb to the CPU in a CPU-only build.
+     * scikit-bio/scikit-bio-binaries#15. Drop this gate once that is fixed and
+     * conda-forge is rebuilt. Must be called after a compute has gone through
+     * skbio_check_acc(), which is what forces skbb to the CPU in a CPU-only
+     * build.
      */
     static bool permanova_pvalue_is_reproducible() {
         return skbb_get_acc_mode() == SKBB_ACC_CPU;
