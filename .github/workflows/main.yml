@@ -125,7 +125,12 @@ jobs:
           unset DEBUG_CFLAGS
           # the r-base package has a broken dependency
           ln -s $CONDA_PREFIX/lib/libreadline.so $CONDA_PREFIX/lib/libreadline.so.6
-          R -e 'install.packages("Rcpp", repos="http://lib.stat.cmu.edu/R/CRAN/")'
+          # cloud.r-project.org, not a single university mirror: on 2026-08-01
+          # lib.stat.cmu.edu started returning an unreadable PACKAGES index, so
+          # install.packages reported "package 'Rcpp' is not available for this
+          # version of R" and rapi_test failed on whichever legs happened to hit
+          # it -- the GPU leg in run 30717704778, an arm leg in 30718905872.
+          R -e 'install.packages("Rcpp", repos="https://cloud.r-project.org")'
           make rapi_test
         fi
         popd
