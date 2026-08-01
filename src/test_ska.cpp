@@ -743,8 +743,9 @@ void test_permanova_unequal() {
  * does not move with the seed.
  *
  * The tolerance is looser here, and deliberately so: a p-value is a rank within
- * the permutation distribution, so ULP drift in the observed F either leaves it
- * alone or steps it by 1/n_perm.
+ * the permutation distribution, over n_perm+1 values counting the unpermuted
+ * one, so ULP drift in the observed F either leaves it alone or steps it by
+ * 1/(n_perm+1).
  */
 void test_permanova_seeded() {
     SUITE_START("test permanova seeded");

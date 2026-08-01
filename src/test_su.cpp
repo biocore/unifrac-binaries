@@ -2086,27 +2086,30 @@ namespace concurrency_fixture {
     static const double       PCOA_TOL   = 1e-12;
     static const double       FSTAT_TOL  = 1e-6;
     /* A p-value is a rank over n_perm+1 pseudo-F values, so its quantum is
-     * 1/(n_perm+1) and the contract in README promises only that it holds or
-     * steps by one. Allow exactly one step: at 1e-2 this assertion was tighter
-     * than the library guarantees, and two things can spend that step without
-     * any concurrency defect. On CPU, ULP drift in the s_T reduction moves the
-     * observed F and can flip a count when it sits on a tail boundary. On GPU,
+     * 1/(n_perm+1) and README's contract promises only that it holds or steps
+     * by one. Budget one step. The old 1e-2 bound was both tighter than that
+     * contract and arbitrary: it sits exactly on the quantum, so whether a
+     * one-count step was accepted depended on how k/100 happened to round --
+     * 80 of the 99 adjacent pairs exceeded it, 19 did not.
+     *
+     * One mechanism can spend that step here, and it is not ours:
      * scikit-bio/scikit-bio-binaries#15 leaves the last permutation's pseudo-F
-     * uninitialized, so one count is heap garbage -- stable when computes run
-     * one at a time, not when they overlap.
+     * uninitialized on a GPU, worth at most one count because it is one array
+     * element feeding one comparison. Stable when computes run one at a time,
+     * not when they overlap.
      *
-     * What one step costs us, measured on this fixture at ORD_SEED = 7 rather
-     * than assumed: of 59 other seeds, 49 move the p-value past 1.5 counts and
-     * 10 land inside it. So a single comparison catches a leaked seed about
-     * five times in six -- but a leak would have to survive all N_THREADS *
-     * N_ITERS of them, and it does not. Widening from 1e-2 barely moves that:
-     * at the old bound 2 of those 10 were caught, the rest already were not.
+     * ULP drift in skbb's s_T reduction could in principle flip a count too,
+     * but measured at a fixed OpenMP width it does not on this fixture: over
+     * 500 repeats per width, fstat takes two values ~9e-16 apart and the
+     * p-value takes exactly one. (Across *different* widths the p-value does
+     * move, but for an unrelated reason -- see the note on width in
+     * test_concurrent_permanova_inmem.)
      *
-     * Note fstat is the unpermuted statistic and does not depend on the seed at
-     * all -- it was identical for all 59. FSTAT_TOL is the corruption check;
-     * the p-value is the only part that sees the permutation stream. That the
-     * seed is consumed at all is pinned directly elsewhere, by test_pcoa_seeded
-     * and by the permanova case in tests/inmem.
+     * fstat is the unpermuted statistic, so it never sees the permutation
+     * stream and cannot detect a seed problem at all; FSTAT_TOL is purely the
+     * corruption check. The p-value is the only half that can, which is why
+     * test_concurrent_permanova_inmem asserts the tolerance still discriminates
+     * rather than trusting a number written in a comment.
      */
     static const double       PVALUE_TOL = 1.5 / (PERM_PERMS + 1);
 
@@ -2213,6 +2216,38 @@ void test_concurrent_permanova_inmem() {
     ASSERT(ref_fstat > 0.0);
     ASSERT(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
 
+    /* PVALUE_TOL still discriminates. Asserted rather than asserted-in-prose,
+     * because the bound is only worth having if a wrong answer can exceed it,
+     * and that depends on the fixture, ORD_SEED and PERM_PERMS -- all of which
+     * can be edited without anyone rechecking a comment. Checked over a spread
+     * of seeds, as test_permanova_seeded does in test_ska.cpp: a p-value is a
+     * rank, so any single pair of seeds may legitimately agree. Measured here,
+     * 49 of 59 alternative seeds clear the bound.
+     *
+     * Note this also means the p-value is the only half of the check that sees
+     * the seed: ref_fstat is the unpermuted statistic and was bit-identical for
+     * all 59.
+     */
+    {
+        unsigned int differing = 0;
+        for (int s = ORD_SEED + 1; s <= ORD_SEED + 5; s++) {
+            double f = 0.0, pv = 0.0;
+            if (compute_permanova_inmem_fp64_seeded(dm->matrix, dm->n_samples,
+                                                    inmem_fixture::GROUPING,
+                                                    PERM_PERMS, s, &f, &pv) != okay) continue;
+            ASSERT(fabs(f - ref_fstat) <= FSTAT_TOL);   // fstat ignores the seed
+            if (fabs(pv - ref_pvalue) > PVALUE_TOL) differing++;
+        }
+        ASSERT(differing > 0);
+    }
+
+    /* All workers share this thread's OpenMP width, which matters: skbb sizes
+     * its permutation chunk as 2*omp_get_max_threads()*16, so the width picks
+     * the permutation set and a seeded p-value reproduces per (seed, width),
+     * not across widths. Measured on this fixture at ORD_SEED = 7: 0.55 at
+     * width 1, 0.49 at every width >= 2. Documented in README alongside the
+     * same caveat for a seeded subsample.
+     */
     run_workers([&](outcome* o) {
         permanova_worker(dm->matrix, dm->n_samples, ref_fstat, ref_pvalue, o);
     });

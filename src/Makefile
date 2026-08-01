@@ -200,11 +200,24 @@ test_binaries: test_su test_ska test_api test_su_api
 test_su: test_su.cpp api.hpp tree.o tsv.o biom.o biom_inmem.o biom_subsampled.o unifrac.o skbio_alt.o api.o $(UNIFRAC_FILES)
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) test_su.cpp -o $@ tree.o biom.o biom_inmem.o biom_subsampled.o tsv.o $(UNIFRAC_FILES) unifrac.o skbio_alt.o api.o -llz4 $(SKBBLIB) -lpthread
 # then exercise the optimized code through the API interface
-# Do not add $(SKBBLIB) here. Making libskbb a direct DT_NEEDED of the
-# executable stops unifrac's NVIDIA detection from finding the device: on the
-# linux-gpu-cuda runner, test_api (no -lskbb) detects it on every run while
-# test_su and a briefly-linked test_su_api did not on any. That silently drops
-# this whole suite off the GPU.
+# Do not add $(SKBBLIB) here, and note that -DAPI_ONLY=1 means nothing in this
+# binary should need skbb symbols -- if you hit an undefined reference, that is
+# the thing to fix, not this line.
+#
+# Observed on the linux-gpu-cuda runner, cause not established: binaries that
+# link libskbb directly report "NVIDIA GPU not detected" while ones that do not
+# report it detected. test_api (no -lskbb) detected it on all four runs of
+# 2026-07-31; test_su (always -lskbb) on none; test_su_api flipped to
+# undetected when the flag was briefly added and back when it was removed.
+# Suspected link-order effect -- skbb loads its backend with dlmopen, so two
+# CUDA runtimes in separate namespaces is the obvious candidate -- but that is
+# unverified. Whatever the cause, adding the flag takes this whole suite off
+# the GPU silently, which is how the PERMANOVA concurrency test came to pass
+# for the wrong reason. See concurrency_fixture in test_su.cpp.
+#
+# Consequence worth knowing: test_su below does link $(SKBBLIB), because it
+# links skbio_alt.o directly and needs those symbols. So its assertions have
+# never run on a device either.
 test_su_api: test_su.cpp test_helper.hpp api.hpp $(PREFIX)/lib/lib$(SSU).so
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) -DAPI_ONLY=1 test_su.cpp -o $@ -l$(SSU) -lpthread
 

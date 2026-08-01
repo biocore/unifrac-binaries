@@ -249,19 +249,18 @@ Two traps worth knowing, even single-threaded:
 `one_off_matrix_inmem_*` is bit-identical to the serial answer; a concurrent
 `pcoa*_seeded` is not, because its parallel reductions are not order-pinned —
 2.8e-16 measured on the 6-sample fixture, against ~0.5 for a changed seed. A
-PERMANOVA p-value is a rank, so it instead either holds or steps by `1/n_perm`.
-Reproducible, but not a bitwise cache key.
+PERMANOVA p-value is a rank over `n_perm + 1` values, counting the unpermuted
+one, so it instead either holds or steps by `1/(n_perm + 1)`. Reproducible, but
+not a bitwise cache key. On a GPU one of those steps is already spent on a
+dependency bug — see [Known issues](#known-issues).
 
-**On a GPU, spend that step on a dependency bug instead.**
-scikit-bio-binaries sizes the device buffer for the permuted pseudo-F values at
-`n_perm` but launches its kernel over `n_perm + 1` groupings, so the last
-permutation is never computed on the host side and the counting loop reads
-uninitialized memory. Every GPU p-value is one count of heap garbage away from
-correct — stable enough to look reproducible when computes run one at a time,
-not when they overlap. `fstat` is unaffected. This is
-[scikit-bio-binaries#15](https://github.com/scikit-bio/scikit-bio-binaries/issues/15);
-until it is fixed, force the ordination path to the CPU with `SKBB_USE_GPU=N` if
-you need the p-value to be exact rather than within one count.
+**A seeded PERMANOVA also reproduces per thread count, not across thread
+counts,** for a different reason than the subsample below. scikit-bio-binaries
+sizes its permutation chunk as `2 * omp_get_max_threads() * 16`, so the calling
+thread's OpenMP width selects the chunking, and the chunking selects the
+permutation set. On the 6-sample fixture at `seed = 7`, width 1 gives `p = 0.55`
+and every width `>= 2` gives `p = 0.49`. Concurrent callers sharing a width are
+unaffected; treat a p-value as reproducible only per `(seed, width)` pair.
 
 **A seeded subsample reproduces per thread count, not across thread counts.**
 The draw is distributed across the OpenMP team, so team size changes the result:
@@ -311,7 +310,7 @@ set scikit-bio-binaries' own variable:
 
     export SKBB_USE_GPU=N
 
-(This used to be documented as `UNIFRAC_SKBIO_USE_GPU`, which nothing reads.)
+Both are latched on the first compute, so set them before it, not between calls.
 
 To check which code path is used (Unifrac will print it to standard output at runtime), set:
 
@@ -323,6 +322,26 @@ If more than one GPU is present, one can select the one to use by setting:
     export ACC_DEVICE_NUM=gpunum
 
 Note that there is no GPU support for MacOS.
+
+### Known issues
+
+**A PERMANOVA p-value computed on a GPU counts one uninitialized value.** This
+affects a single ordinary call, not just concurrent ones. scikit-bio-binaries
+sizes the device buffer for the permuted pseudo-F values at `n_perm` while
+launching its kernel over `n_perm + 1` groupings, so the kernel writes one
+element past that buffer and the last permutation is never copied back to the
+host — the counting loop then reads whatever was on the heap. One of the
+`n_perm + 1` counts is therefore garbage, which shifts the p-value by
+`1/(n_perm + 1)` whenever the garbage compares differently from the true value.
+`fstat` is the unpermuted statistic and is unaffected. Run one at a time the
+garbage tends to be stable, so results look reproducible; run several computes
+concurrently and they stop agreeing.
+
+This is
+[scikit-bio-binaries#15](https://github.com/scikit-bio/scikit-bio-binaries/issues/15).
+Until it is fixed, set `SKBB_USE_GPU=N` (or `UNIFRAC_USE_GPU=N`, which also
+forces the dependency to the CPU) if you need an exact p-value. CPU builds are
+not affected.
 
 ## Additional timing information
 

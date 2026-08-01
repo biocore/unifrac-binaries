@@ -62,7 +62,20 @@ static bool ssu_load_check() {
        const char* lib_name = ssu_get_lib_name();
        dl_handle = dlopen(lib_name, RTLD_LAZY);
        if (!dl_handle) {
-          // no such shared library
+          /* Callers turn this into "GPU not detected", which conflates "no such
+           * library" with "the library is there but would not load". Surface
+           * dlerror() under either info flag so the two are distinguishable;
+           * without it, diagnosing a runner that stops seeing its GPU takes
+           * several CI runs of correlation.
+           */
+          const char* dl_msg = dlerror();
+          const char* env_cpu_info = getenv("UNIFRAC_CPU_INFO");
+          const char* env_gpu_info = getenv("UNIFRAC_GPU_INFO");
+          if (((env_cpu_info!=NULL) && (env_cpu_info[0]=='Y')) ||
+              ((env_gpu_info!=NULL) && (env_gpu_info[0]=='Y'))) {
+              printf("INFO (unifrac): Could not load shared library %s: %s\n",
+                     lib_name, (dl_msg!=NULL) ? dl_msg : "unknown error");
+          }
           pthread_mutex_unlock(&dl_mutex);
 	  return false;
        }

@@ -152,6 +152,15 @@ static const int          ORD_SEED   = 7;
 static const unsigned int PCOA_DIMS  = 3;   // < n_samples (6)
 static const unsigned int PERM_PERMS = 99;
 static const double       PCOA_TOL   = 1e-12;
+static const double       FSTAT_TOL  = 1e-6;
+/* One rank step, matching test_su.cpp's concurrency_fixture -- same fixture,
+ * same seed, same permutation count, so the bound has to agree. A p-value is a
+ * rank over PERM_PERMS+1 values and README promises only that it holds or steps
+ * by one; 1e-2 sat exactly on that quantum. This build is CPU-only, so
+ * scikit-bio/scikit-bio-binaries#15 cannot fire here, but the constant is
+ * shared reasoning and drifting the two apart is how one of them ends up wrong.
+ */
+static const double       PVALUE_TOL = 1.5 / (PERM_PERMS + 1);
 
 static bool run_pcoa(std::vector<double> &out, int seed) {
     double *ev = NULL, *sa = NULL, *pe = NULL;
@@ -198,7 +207,8 @@ static void permanova_worker(double ref_fstat, double ref_pvalue, outcome* out) 
             out->n_status++;
             continue;
         }
-        if (!almost_equal(fstat, ref_fstat, 1e-6) || !almost_equal(pvalue, ref_pvalue, 1e-2))
+        if (!almost_equal(fstat, ref_fstat, FSTAT_TOL) ||
+            !almost_equal(pvalue, ref_pvalue, PVALUE_TOL))
             out->n_mismatch++;
         out->n_ok++;
     }
@@ -290,6 +300,27 @@ int main(void) {
                                               &ref_fstat, &ref_pvalue) == okay);
     CHECK(ref_fstat > 0.0);
     CHECK(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
+
+    /* The permanova seed is really consumed, and PVALUE_TOL still discriminates.
+     * The pcoa block above has had this since it was written; permanova did not,
+     * which only came to light when a comment in test_su.cpp claimed it did.
+     * Spread of seeds rather than one alternative, as in test_ska.cpp's
+     * test_permanova_seeded: a p-value is a rank, so any single pair can agree.
+     * fstat is the unpermuted statistic and does not move with the seed at all,
+     * so it is asserted equal here rather than expected to differ.
+     */
+    {
+        unsigned int differing = 0;
+        for (int s = ORD_SEED + 1; s <= ORD_SEED + 5; s++) {
+            double f = 0.0, pv = 0.0;
+            CHECK(compute_permanova_inmem_fp64_seeded(FIXTURE_UNWEIGHTED_DIST, FIXTURE_N_SAMP,
+                                                      FIXTURE_GROUPING, PERM_PERMS, s,
+                                                      &f, &pv) == okay);
+            CHECK(almost_equal(f, ref_fstat, FSTAT_TOL));
+            if (!almost_equal(pv, ref_pvalue, PVALUE_TOL)) differing++;
+        }
+        CHECK(differing > 0);
+    }
 
     run_workers([ref_fstat, ref_pvalue](outcome* o) {
                     permanova_worker(ref_fstat, ref_pvalue, o);
