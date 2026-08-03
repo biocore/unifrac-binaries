@@ -1200,15 +1200,13 @@ void pcoa_mixed(const double * mat, const uint32_t n_samples, const uint32_t n_d
 /* Per-call-seeded variants of the three above; seed as for
  * one_off_matrix_inmem_v4.
  *
- * Unlike the three non-seeded forms, these are EXTERN, so they are reachable
- * through the ../combined/libssu.c dispatcher -- which is the libssu.so that
- * gets installed. The older names carry C++ linkage and no wrapper, so they are
- * only callable when linking src/libssu.so directly; changing that now would
- * break anyone linking the mangled names.
+ * C++ linkage and no dispatcher wrapper, matching the non-seeded pcoa* they
+ * extend: like those, they are reachable only by linking src/libssu.so directly
+ * or one of the static archives, not through the installed dispatcher.
  */
-EXTERN void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double **eigenvalues, double **samples, double **proportion_explained);
-EXTERN void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
-EXTERN void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
+void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double **eigenvalues, double **samples, double **proportion_explained);
+void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
+void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
 
 
 #ifdef __cplusplus

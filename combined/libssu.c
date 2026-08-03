@@ -205,10 +205,42 @@ static ComputeStatus (*dl_one_off_matrix_inmem_v4)(const support_biom_t *, const
                                                    bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp64_t**) = NULL;
 static ComputeStatus (*dl_one_off_matrix_inmem_fp32_v4)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
                                                         bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp32_t**) = NULL;
-/* v3 is not dispatched here: api_compat.hpp, included at the bottom of this
- * file, implements it in terms of v4 -- the same way it implements v2 in terms
- * of v3.
+/* v3 is dispatched here as well as v4, and must stay that way. This library
+ * dlopens a variant that is versioned independently of it, so resolving v3 by
+ * dlsym is what lets a variant predating v4 keep answering v3 calls. Letting
+ * api_compat.hpp forward v3 to v4 instead would make every v3 call require a
+ * v4 symbol in the variant, and ssu_load() exits the process when a symbol is
+ * missing. UNIFRAC_COMPAT_SKIP_INMEM_V3, defined above the include at the
+ * bottom of this file, keeps the two definitions from colliding.
  */
+static ComputeStatus (*dl_one_off_matrix_inmem_v3)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
+                                                   bool, bool, unsigned int, unsigned int, bool, const char *, mat_full_fp64_t**) = NULL;
+static ComputeStatus (*dl_one_off_matrix_inmem_fp32_v3)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
+                                                        bool, bool, unsigned int, unsigned int, bool, const char *, mat_full_fp32_t**) = NULL;
+
+ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                             const char* unifrac_method, bool variance_adjust, double alpha,
+                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                             unsigned int subsample_depth, bool subsample_with_replacement,
+                                             const char *mmap_dir,
+                                             mat_full_fp64_t** result) {
+   cond_ssu_load("one_off_matrix_inmem_v3", (void **) &dl_one_off_matrix_inmem_v3);
+
+   return (*dl_one_off_matrix_inmem_v3)(table_data, tree_data, unifrac_method, variance_adjust, alpha,
+                                 bypass_tips, normalize_sample_counts, n_substeps, subsample_depth, subsample_with_replacement, mmap_dir, result);
+}
+
+ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                                  const char* unifrac_method, bool variance_adjust, double alpha,
+                                                  bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                                  unsigned int subsample_depth, bool subsample_with_replacement,
+                                                  const char *mmap_dir,
+                                                  mat_full_fp32_t** result) {
+   cond_ssu_load("one_off_matrix_inmem_fp32_v3", (void **) &dl_one_off_matrix_inmem_fp32_v3);
+
+   return (*dl_one_off_matrix_inmem_fp32_v3)(table_data, tree_data, unifrac_method, variance_adjust, alpha,
+                                      bypass_tips, normalize_sample_counts, n_substeps, subsample_depth, subsample_with_replacement, mmap_dir, result);
+}
 
 ComputeStatus one_off_matrix_inmem_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                              const char* unifrac_method, bool variance_adjust, double alpha,
@@ -470,30 +502,10 @@ ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims
    return (*dl_compute_permanova_inmem_fp32)(mat, n_dims, grouping, permanova_perms, fstat, pvalue);
 }
 
-static void (*dl_pcoa_seeded)(const double*, uint32_t, uint32_t, int, double**, double**, double**) = NULL;
-static void (*dl_pcoa_fp32_seeded)(const float*, uint32_t, uint32_t, int, float**, float**, float**) = NULL;
-static void (*dl_pcoa_mixed_seeded)(const double*, uint32_t, uint32_t, int, float**, float**, float**) = NULL;
-
-void pcoa_seeded(const double *mat, const uint32_t n_samples, const uint32_t n_dims, int seed,
-                 double **eigenvalues, double **samples, double **proportion_explained) {
-   cond_ssu_load("pcoa_seeded", (void **) &dl_pcoa_seeded);
-
-   (*dl_pcoa_seeded)(mat, n_samples, n_dims, seed, eigenvalues, samples, proportion_explained);
-}
-
-void pcoa_fp32_seeded(const float *mat, const uint32_t n_samples, const uint32_t n_dims, int seed,
-                      float **eigenvalues, float **samples, float **proportion_explained) {
-   cond_ssu_load("pcoa_fp32_seeded", (void **) &dl_pcoa_fp32_seeded);
-
-   (*dl_pcoa_fp32_seeded)(mat, n_samples, n_dims, seed, eigenvalues, samples, proportion_explained);
-}
-
-void pcoa_mixed_seeded(const double *mat, const uint32_t n_samples, const uint32_t n_dims, int seed,
-                       float **eigenvalues, float **samples, float **proportion_explained) {
-   cond_ssu_load("pcoa_mixed_seeded", (void **) &dl_pcoa_mixed_seeded);
-
-   (*dl_pcoa_mixed_seeded)(mat, n_samples, n_dims, seed, eigenvalues, samples, proportion_explained);
-}
+/* pcoa_seeded / _fp32_seeded / _mixed_seeded are deliberately not dispatched:
+ * they carry C++ linkage, matching the non-seeded pcoa* they extend, and like
+ * those are reachable only by linking src/libssu.so directly.
+ */
 
 static ComputeStatus (*dl_compute_permanova_inmem_fp64_seeded)(const double*, unsigned int, const uint32_t*, unsigned int, int, double*, double*) = NULL;
 static ComputeStatus (*dl_compute_permanova_inmem_fp32_seeded)(const float*, unsigned int, const uint32_t*, unsigned int, int, float*, float*) = NULL;
@@ -673,6 +685,9 @@ IOStatus write_partial(const char* filename, const partial_mat_t* result) {
 
 // compat versions
 
+// one_off_matrix_inmem{,_fp32}_v3 are dispatched above rather than forwarded to
+// v4 here; see the note beside them for why that matters to older variants.
+#define UNIFRAC_COMPAT_SKIP_INMEM_V3 1
 #include "../src/api_compat.hpp"
 
 

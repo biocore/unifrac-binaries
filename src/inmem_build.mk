@@ -131,18 +131,35 @@ inmem_test: test_concurrency_inmem
 
 # ASan variant. A plain run only catches a fault that happens to land; the
 # n_substeps cases in particular corrupted the heap silently before they were
-# clamped, and only ASan called it. Two notes:
+# clamped, and only ASan called it. Three notes:
 #   - The runtime has to be preloaded even though the binary links it:
 #     libskbb.so gets initialized ahead of it and ASan then refuses to start.
 #     -static-libasan would sidestep the preload, but conda-forge's
 #     libsanitizer package ships no libasan.a, so it will not link there.
 #   - Leak detection is off. The target is memory safety in unifrac's own code
 #     under concurrency, not allocation hygiene in whatever skbb is installed.
+#   - gcc and clang only. Both -fsanitize=address and the -print-file-name
+#     lookup below are gcc/clang spellings; the NVIDIA HPC SDK and the AMD
+#     offload compilers do not accept them. That costs nothing in practice --
+#     this archive is CPU-only (-DUNIFRAC_WASM=1, no accelerator TUs) and
+#     INMEM_CXX defaults to $(CXX) -- but it must fail clearly rather than emit
+#     a binary that was never instrumented, so the target checks first.
+#     Override INMEM_ASAN_FLAGS if a compiler spells it differently.
 # The archive keeps its shipped -O3; the n_substeps overflow was confirmed to
 # report at that level.
 INMEM_ASAN_FLAGS ?= -fsanitize=address -g
 
-test_concurrency_inmem_asan: $(INMEM_TEST_DEPS) libssu_inmem_asan.a
+# gcc reports "gcc"/"g++", clang and its derivatives report "clang" in --version
+INMEM_ASAN_CXX_OK := $(shell $(INMEM_CXX) --version 2>/dev/null | head -1 | grep -ciE 'gcc|g\+\+|clang')
+
+inmem_asan_supported:
+	@test "$(INMEM_ASAN_CXX_OK)" != "0" || { \
+	    echo "ERROR: the ASan targets need gcc or clang; INMEM_CXX='$(INMEM_CXX)' reports:"; \
+	    $(INMEM_CXX) --version 2>&1 | head -1; \
+	    echo "       Build the plain 'inmem_test' target, or set INMEM_CXX to gcc/clang."; \
+	    exit 1; }
+
+test_concurrency_inmem_asan: $(INMEM_TEST_DEPS) libssu_inmem_asan.a | inmem_asan_supported
 	$(INMEM_CXX) $(INMEM_CXXFLAGS) $(INMEM_ASAN_FLAGS) $< -o $@ libssu_inmem_asan.a \
 	    $(INMEM_TEST_LDFLAGS) $(INMEM_SKBB_LIB) -lpthread
 
@@ -177,4 +194,4 @@ inmem_clean:
 	      test_concurrency_inmem test_concurrency_inmem_asan
 	rm -rf $(INMEM_SKBB_INC_STAGE)
 
-.PHONY: inmem_static inmem_test inmem_test_asan install_inmem inmem_clean
+.PHONY: inmem_static inmem_test inmem_test_asan inmem_asan_supported install_inmem inmem_clean

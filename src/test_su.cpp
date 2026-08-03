@@ -2127,6 +2127,12 @@ namespace concurrency_fixture {
         return dm;
     }
 
+    /* pcoa_seeded carries C++ linkage and no dispatcher wrapper, matching the
+     * non-seeded pcoa* it extends, so it is not reachable from the installed
+     * libssu.so. Exercised in the test_su build, which links the objects
+     * directly, and in tests/inmem against the static archive.
+     */
+#ifndef API_ONLY
     static bool collect_pcoa(const double *dm, unsigned int n_samples,
                              std::vector<double> &out) {
         double *ev = NULL, *sa = NULL, *pe = NULL;
@@ -2165,6 +2171,8 @@ namespace concurrency_fixture {
         }
     }
 
+#endif // API_ONLY (pcoa_seeded helpers)
+
     static void permanova_worker(const double *dm, unsigned int n_samples,
                                  double ref_fstat, double ref_pvalue, outcome* out) {
         for (unsigned int i = 0; i < N_ITERS; i++) {
@@ -2182,6 +2190,7 @@ namespace concurrency_fixture {
     }
 }
 
+#ifndef API_ONLY
 void test_concurrent_pcoa() {
     SUITE_START("test concurrent pcoa_seeded");
 
@@ -2199,6 +2208,8 @@ void test_concurrent_pcoa() {
 
     SUITE_END();
 }
+
+#endif // API_ONLY (test_concurrent_pcoa)
 
 void test_concurrent_permanova_inmem() {
     SUITE_START("test concurrent compute_permanova_inmem_fp64_seeded");
@@ -3026,7 +3037,9 @@ int main(int argc, char** argv) {
     test_concurrent_matrix_inmem();
     test_concurrent_matrix_inmem_seeded();
     test_concurrent_faith_pd_inmem();
+#ifndef API_ONLY
     test_concurrent_pcoa();
+#endif
     test_concurrent_permanova_inmem();
     // must stay last; see the comment on the function
     test_concurrent_matrix_inmem_reporting();

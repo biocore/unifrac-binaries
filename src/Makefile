@@ -200,26 +200,24 @@ test_binaries: test_su test_ska test_api test_su_api
 test_su: test_su.cpp api.hpp tree.o tsv.o biom.o biom_inmem.o biom_subsampled.o unifrac.o skbio_alt.o api.o $(UNIFRAC_FILES)
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) test_su.cpp -o $@ tree.o biom.o biom_inmem.o biom_subsampled.o tsv.o $(UNIFRAC_FILES) unifrac.o skbio_alt.o api.o -llz4 $(SKBBLIB) -lpthread
 # then exercise the optimized code through the API interface
-# Do not add $(SKBBLIB) here, and note that -DAPI_ONLY=1 means nothing in this
-# binary should need skbb symbols -- if you hit an undefined reference, that is
-# the thing to fix, not this line.
 #
-# Observed on the linux-gpu-cuda runner, cause not established: binaries that
-# link libskbb directly report "NVIDIA GPU not detected" while ones that do not
-# report it detected. test_api (no -lskbb) detected it on all four runs of
-# 2026-07-31; test_su (always -lskbb) on none; test_su_api flipped to
-# undetected when the flag was briefly added and back when it was removed.
-# Suspected link-order effect -- skbb loads its backend with dlmopen, so two
-# CUDA runtimes in separate namespaces is the obvious candidate -- but that is
-# unverified. Whatever the cause, adding the flag takes this whole suite off
-# the GPU silently, which is how the PERMANOVA concurrency test came to pass
-# for the wrong reason. See concurrency_fixture in test_su.cpp.
+# Links -l$(SSU) and nothing else, on purpose: this binary is also the check
+# that a consumer of the shared library needs no other flag. Do not add
+# $(SKBBLIB) or -lpthread. With -DAPI_ONLY=1 nothing here should need a skbb
+# symbol, so an undefined reference means the test reached past the public API
+# and that is what to fix. A test needing threads of its own belongs in test_su,
+# which links the objects directly.
 #
-# Consequence worth knowing: test_su below does link $(SKBBLIB), because it
-# links skbio_alt.o directly and needs those symbols. So its assertions have
-# never run on a device either.
+# Adding a library here is not free even when it links. On the linux-gpu-cuda
+# runner, binaries linking libskbb directly report "NVIDIA GPU not detected"
+# while ones that do not report it detected: test_api (no -lskbb) detected it on
+# all four runs of 2026-07-31, test_su (always -lskbb) on none, and test_su_api
+# flipped to undetected when $(SKBBLIB) was briefly added and back when removed.
+# Cause not established -- skbb loads its backend with dlmopen, so two CUDA
+# runtimes in separate namespaces is the suspect. The effect is that the whole
+# suite silently stops running on the GPU.
 test_su_api: test_su.cpp test_helper.hpp api.hpp $(PREFIX)/lib/lib$(SSU).so
-	h5c++ $(CPPFLAGS) $(EXEFLAGS) -DAPI_ONLY=1 test_su.cpp -o $@ -l$(SSU) -lpthread
+	h5c++ $(CPPFLAGS) $(EXEFLAGS) -DAPI_ONLY=1 test_su.cpp -o $@ -l$(SSU)
 
 # Create an archive, so we do not need dependencies for functions we do not use
 test_ska_deps.a: tree.o tsv.o biom.o biom_inmem.o biom_subsampled.o skbio_alt.o api.o $(UNIFRAC_FILES)

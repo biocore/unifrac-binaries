@@ -241,9 +241,10 @@ Two traps worth knowing, even single-threaded:
   library's `std::mt19937`, then draws once from it to seed scikit-bio-binaries'
   own global one. Any `seed < 0` call landing in between desynchronizes the
   sequence and silently breaks reproducibility.
-- The three non-seeded `pcoa*` names have C++ linkage and no dispatcher wrapper,
-  so they link only against `src/libssu.so`, not the installed one. The
-  `_seeded` forms are `EXTERN` and reachable either way.
+- The `pcoa*` names, seeded and not, have C++ linkage and no dispatcher wrapper,
+  so they link only against `src/libssu.so` or one of the static archives, not
+  against the installed dispatcher. The `compute_permanova_inmem_*` family,
+  seeded and not, is `EXTERN` and reachable either way.
 
 **Ordination reproduces to a tolerance, not bit-exactly.** A concurrent
 `one_off_matrix_inmem_*` is bit-identical to the serial answer; a concurrent
