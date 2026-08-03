@@ -349,24 +349,29 @@ EXTERN ComputeStatus one_off_wtree(const char* biom_filename, const opaque_bptre
  *      no lock and each gets a reproducible result. If < 0, the draw comes from
  *      the process-global RNG that ssu_set_random_seed() sets, which is what v3
  *      always did. Ignored when subsample_depth is 0, since nothing is drawn.
+ * device_id <int> Where the input (table, tree) and output (distance matrix)
+ *      memory lives. < 0 is host memory, the only mode implemented today.
+ *      >= 0 names an accelerator device and currently returns
+ *      unsupported_device without computing anything.
  * mmap_dir <const char*> If not NULL, area to use for temp memory storage
  * result <mat_full_fp64_t**> the resulting distance matrix in full form, this is initialized within the method so using **
  *
  * one_off_inmem returns the following error codes:
  *
- * okay           : no problems encountered
- * unknown_method : the requested method is unknown.
- * table_empty    : the table does not have any entries
+ * okay               : no problems encountered
+ * unknown_method     : the requested method is unknown.
+ * table_empty        : the table does not have any entries
+ * unsupported_device : device_id >= 0, which is not implemented yet
  */
 EXTERN ComputeStatus one_off_matrix_inmem_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                              const char* unifrac_method, bool variance_adjust, double alpha,
                                              bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
                                              unsigned int subsample_depth, bool subsample_with_replacement, int seed,
-                                             const char *mmap_dir,
+                                             int device_id, const char *mmap_dir,
                                              mat_full_fp64_t** result);
 
 /* Older version, will be deprecated in the future.
- * Equivalent to one_off_matrix_inmem_v4 with seed = -1.
+ * Equivalent to one_off_matrix_inmem_v4 with seed = -1 and device_id = -1.
  */
 EXTERN ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                              const char* unifrac_method, bool variance_adjust, double alpha,
@@ -399,24 +404,26 @@ EXTERN ComputeStatus one_off_inmem(const support_biom_t *table_data, const suppo
  * subsample_depth <uint> Depth of subsampling, if >0
  * subsample_with_replacement <bool> Use subsampling with replacement? (only True supported)
  * seed <int> Subsampling seed, as for one_off_matrix_inmem_v4.
+ * device_id <int> Memory placement, as for one_off_matrix_inmem_v4.
  * mmap_dir <const char*> If not NULL, area to use for temp memory storage
  * result <mat_full_fp32_t**> the resulting distance matrix in full form, this is initialized within the method so using **
  *
  * one_off_inmem returns the following error codes:
  *
- * okay           : no problems encountered
- * unknown_method : the requested method is unknown.
- * table_empty    : the table does not have any entries
+ * okay               : no problems encountered
+ * unknown_method     : the requested method is unknown.
+ * table_empty        : the table does not have any entries
+ * unsupported_device : device_id >= 0, which is not implemented yet
  */
 EXTERN ComputeStatus one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                                   const char* unifrac_method, bool variance_adjust, double alpha,
                                                   bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
                                                   unsigned int subsample_depth, bool subsample_with_replacement, int seed,
-                                                  const char *mmap_dir,
+                                                  int device_id, const char *mmap_dir,
                                                   mat_full_fp32_t** result);
 
 /* Older version, will be deprecated in the future.
- * Equivalent to one_off_matrix_inmem_fp32_v4 with seed = -1.
+ * Equivalent to one_off_matrix_inmem_fp32_v4 with seed = -1 and device_id = -1.
  */
 EXTERN ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                                   const char* unifrac_method, bool variance_adjust, double alpha,

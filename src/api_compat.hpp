@@ -107,7 +107,7 @@ ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const su
                                        bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
                                        unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
                                        mat_full_fp64_t** result) {
-    return one_off_matrix_inmem_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
+    return one_off_matrix_inmem_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,/*device_id*/ -1,mmap_dir,result);
 }
 
 ComputeStatus one_off_matrix_inmem_v2(const support_biom_t *table_data, const support_bptree_t *tree_data,
@@ -133,7 +133,7 @@ ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, con
                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
                                             unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
                                             mat_full_fp32_t** result) {
-    return one_off_matrix_inmem_fp32_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
+    return one_off_matrix_inmem_fp32_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,/*device_id*/ -1,mmap_dir,result);
 }
 
 ComputeStatus one_off_matrix_inmem_fp32_v2(const support_biom_t *table_data, const support_bptree_t *tree_data,

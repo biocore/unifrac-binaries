@@ -89,7 +89,7 @@ static ComputeStatus run_matrix(std::vector<float> &out,
                                        nullptr, &mat)
         : one_off_matrix_inmem_fp32_v4(&table, &tree, "unweighted_fp32",
                                        false, 1.0, false, true, n_substeps,
-                                       SUBSAMPLE_DEPTH, false, seed,
+                                       SUBSAMPLE_DEPTH, false, seed, /*device_id*/ -1,
                                        nullptr, &mat);
     if (rc != okay) return rc;
 

@@ -854,9 +854,15 @@ compute_status one_off_matrix_inmem_v4(const support_biom_t *table_data, const s
                                        const char* unifrac_method, bool variance_adjust, double alpha,
                                        bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
                                        unsigned int subsample_depth, bool subsample_with_replacement, int seed,
-                                       const char *mmap_dir,
+                                       int device_id, const char *mmap_dir,
                                        mat_full_fp64_t** result) {
     SETUP_TDBG("one_off_matrix_inmem")
+    /* Device-resident input and output are not implemented. Rejected before any
+     * work so a caller that asks cannot mistake a host-computed answer for a
+     * device-computed one.
+     */
+    if (device_id >= 0) return unsupported_device;
+
     bool fp64;
     compute_status rc = is_fp64_method(unifrac_method, fp64);
 
@@ -894,9 +900,12 @@ compute_status one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, co
                                             const char* unifrac_method, bool variance_adjust, double alpha,
                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
                                             unsigned int subsample_depth, bool subsample_with_replacement, int seed,
-                                            const char *mmap_dir,
+                                            int device_id, const char *mmap_dir,
                                             mat_full_fp32_t** result) {
     SETUP_TDBG("one_off_matrix_inmem_fp32")
+    // see one_off_matrix_inmem_v4
+    if (device_id >= 0) return unsupported_device;
+
     bool fp64;
     compute_status rc = is_fp64_method(unifrac_method, fp64);
 

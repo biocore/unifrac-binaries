@@ -1716,7 +1716,7 @@ namespace inmem_fixture {
                                            0, false, NULL, &mat)
             : one_off_matrix_inmem_fp32_v4(&table, &tree, "unweighted_fp32",
                                            false, 1.0, false, true, n_substeps,
-                                           SUBSAMPLE_DEPTH, false, seed, NULL, &mat);
+                                           SUBSAMPLE_DEPTH, false, seed, /*device_id*/ -1, NULL, &mat);
         if (rc != okay) return rc;
 
         const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
@@ -2122,7 +2122,7 @@ namespace concurrency_fixture {
         mat_full_fp64_t* dm = NULL;
         ASSERT(one_off_matrix_inmem_v4(&table, &tree, "unweighted_fp64",
                                        false, 1.0, false, true, 1, 0, false, -1,
-                                       NULL, &dm) == okay);
+                                       /*device_id*/ -1, NULL, &dm) == okay);
         ASSERT(dm != NULL);
         return dm;
     }
@@ -2322,13 +2322,31 @@ void test_matrix_inmem_seeded() {
                                                NULL, &mat)
                 : one_off_matrix_inmem_fp32_v4(&table, &tree, "unweighted_fp32", false, 1.0,
                                                false, true, 1, SUBSAMPLE_DEPTH, false,
-                                               -1, NULL, &mat)) == okay);
+                                               -1, /*device_id*/ -1, NULL, &mat)) == okay);
         ASSERT(mat != NULL);
         const size_t n_els = size_t(mat->n_samples) * size_t(mat->n_samples);
         (pass == 0 ? v3 : v4_neg).assign(mat->matrix, mat->matrix + n_els);
         destroy_mat_full_fp32(&mat);
     }
     ASSERT(v3 == v4_neg);
+
+    /* device_id >= 0 asks for device-resident input and output, which is not
+     * implemented. It must be refused rather than silently answered on the host,
+     * and refused without allocating a result.
+     */
+    for (int device_id = 0; device_id <= 1; device_id++) {
+        mat_full_fp64_t* dm64 = NULL;
+        ASSERT(one_off_matrix_inmem_v4(&table, &tree, "unweighted_fp64", false, 1.0,
+                                       false, true, 1, 0, false, -1,
+                                       device_id, NULL, &dm64) == unsupported_device);
+        ASSERT(dm64 == NULL);
+
+        mat_full_fp32_t* dm32 = NULL;
+        ASSERT(one_off_matrix_inmem_fp32_v4(&table, &tree, "unweighted_fp32", false, 1.0,
+                                            false, true, 1, 0, false, -1,
+                                            device_id, NULL, &dm32) == unsupported_device);
+        ASSERT(dm32 == NULL);
+    }
 
     SUITE_END();
 }
