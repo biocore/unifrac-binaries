@@ -11,14 +11,11 @@
  * Concurrency test for libssu_inmem.a -- the native in-memory static archive
  * that embedders link (see inmem_build.mk). src/test_su.cpp covers the same
  * entry points, but only as built for libssu.so, and this is a different
- * configuration: UNIFRAC_WASM is defined, so no SIGUSR1 handler is installed
- * and CPU_SETSIZE falls back to 32, in a build that -- unlike WASM -- is
+ * configuration: UNIFRAC_WASM is defined, in a build that -- unlike WASM -- is
  * genuinely multi-threaded. Only the in-memory API surface is declared, so a
  * file-based entry point slipping into this test would not compile.
  *
- * One consequence worth being explicit about: the report_status use-after-free
- * that motivated this work is inert here, because no flag is ever set. What
- * this pins is that concurrent computes agree with the serial answer.
+ * What this pins is that concurrent computes agree with the serial answer.
  *
  * Fixtures are shared with the WASM suite (tests/wasm/fixtures.hpp).
  *

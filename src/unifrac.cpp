@@ -13,7 +13,6 @@
 #include <unordered_map>
 #include <cstdlib>
 #include <thread>
-#include <signal.h>
 #include <stdarg.h>
 #include <algorithm>
 #include <pthread.h>
@@ -525,10 +524,6 @@ void su::process_stripes(biom_interface &table,
                          std::vector<double*> &dm_stripes,
                          std::vector<double*> &dm_stripes_total,
                          std::vector<su::task_parameters> &tasks) {
-
-    // register a signal handler so we can ask the master thread for its
-    // progress
-    register_report_status();
 
     // cannot use threading with openacc or openmp
     for(unsigned int tid = 0; tid < tasks.size(); tid++) {

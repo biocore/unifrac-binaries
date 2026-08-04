@@ -150,10 +150,9 @@ jobs:
   # the concurrency suite against it.
   #
   # Nothing else in CI builds this archive, and it is a configuration all its
-  # own: UNIFRAC_WASM is defined, so no SIGUSR1 handler is installed and
-  # CPU_SETSIZE takes its fallback value, yet unlike the WASM build it is
-  # genuinely multi-threaded. The suite in src/test_su.cpp covers the same
-  # entry points, but only as compiled for libssu.so.
+  # own: UNIFRAC_WASM is defined, yet unlike the WASM build it is genuinely
+  # multi-threaded. The suite in src/test_su.cpp covers the same entry points,
+  # but only as compiled for libssu.so.
   #
   # skbb comes from conda-forge, headers and library from the same package,
   # so this job needs no second checkout.

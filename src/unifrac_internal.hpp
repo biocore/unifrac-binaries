@@ -18,12 +18,6 @@
 #include "unifrac.hpp"
 
 namespace su {
- // helper reporting functions
- // register_report_status() is idempotent and installs process-wide state that
- // is never torn down, so concurrent computes may each call it
- void register_report_status();
- void try_report(const su::task_parameters* task_p, unsigned int k, unsigned int max_k);
-
  template<class TFloat>
  class PropStack {
    private:

@@ -4,7 +4,6 @@
 #include <string>
 #include <iomanip>
 #include <glob.h>
-#include <signal.h>
 #include "api.hpp"
 #include "cmd.hpp"
 // Using inlined-header-only funtions
@@ -79,14 +78,6 @@ void usage() {
     std::cout << "        Chen et al. Bioinformatics 2012; DOI: 10.1093/bioinformatics/bts342" << std::endl;
     std::cout << "    For Variance Adjusted UniFrac, please see: " << std::endl;
     std::cout << "        Chang et al. BMC Bioinformatics 2011; DOI: 10.1186/1471-2105-12-118" << std::endl;
-    std::cout << std::endl;
-    std::cout << "Runtime progress can be obtained by issuing a SIGUSR1 signal. If running with " << std::endl;
-    std::cout << "multiple threads, this signal will only be honored if issued to the master PID. " << std::endl;
-    std::cout << "The report will yield the following information: " << std::endl;
-    std::cout << std::endl;
-    std::cout << "tid:<thread ID> start:<starting stripe> stop:<stopping stripe> k:<postorder node index> total:<number of nodes>" << std::endl;
-    std::cout << std::endl;
-    std::cout << "The proportion of the tree that has been evaluated can be determined from (k / total)." << std::endl;
     std::cout << std::endl;
 }
 
@@ -542,12 +533,6 @@ int mode_multi(const std::string &table_filename, const std::string &tree_filena
     return (status==okay) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-void ssu_sig_handler(int signo) {
-    if (signo == SIGUSR1) {
-        printf("Status cannot be reported.\n");
-    }
-}
-
 Format get_format(const std::string &format_string, const std::string &method_string, const std::string &mode_string) {
     Format format_val = format_invalid;
     if (format_string.empty()) {
@@ -588,7 +573,6 @@ std::string format2str(Format format_val) {
 }
 
 int main(int argc, char **argv){
-    signal(SIGUSR1, ssu_sig_handler);
     InputParser input(argc, argv);
     if(input.cmdOptionExists("-h") || input.cmdOptionExists("--help") || argc == 1) {
         usage();

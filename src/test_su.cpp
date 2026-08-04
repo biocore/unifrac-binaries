@@ -1,6 +1,5 @@
 #include "api.hpp"
 
-#include <signal.h>
 #include <thread>
 #include <vector>
 
@@ -2035,9 +2034,7 @@ namespace concurrency_fixture {
         }
     }
 
-    /* Serial compute: both the expected answer and the thing that installs the
-     * SIGUSR1 handler, since su::process_stripes registers it.
-     */
+    /* Serial compute: the expected answer the concurrent runs are compared to. */
     static void serial_reference(std::vector<float> &reference) {
         ASSERT(inmem_fixture::run_matrix(reference, 1, /*seed*/ -1) == okay);
         ASSERT(reference.size() == size_t(inmem_fixture::N_SAMP) * size_t(inmem_fixture::N_SAMP));
@@ -2358,37 +2355,6 @@ void test_matrix_inmem_seeded() {
                                             device_id, NULL, &dm32) == unsupported_device);
         ASSERT(dm32 == NULL);
     }
-
-    SUITE_END();
-}
-
-/* The progress-reporting path itself, under concurrency: SIGUSR1 sets every
- * flag, and each in-flight compute clears and reports its own via sync_printf.
- *
- * The flags are raised *before* the workers start rather than during the run,
- * so every worker is guaranteed to hit one instead of racing the signal against
- * a compute that may already be finished -- deterministic coverage rather than
- * a test that usually exercises nothing.
- *
- * Emits a few "tid:..." progress lines on stdout; that is the feature working.
- * Keep this last in main(): sig_handler sets all CPU_SETSIZE flags and only the
- * ones belonging to tasks that actually run get consumed, so the leftovers
- * would make later suites emit stray progress lines.
- */
-void test_concurrent_matrix_inmem_reporting() {
-    SUITE_START("test concurrent progress reporting");
-
-    using namespace concurrency_fixture;
-
-    // Also installs the SIGUSR1 handler, so the raise() below cannot hit the
-    // default disposition and kill the test process.
-    std::vector<float> reference;
-    serial_reference(reference);
-
-    raise(SIGUSR1);
-
-    // Reporting must not disturb the results, and must not crash.
-    run_workers([&reference](outcome* o) { matrix_worker(-1, &reference, o); });
 
     SUITE_END();
 }
@@ -3041,8 +3007,6 @@ int main(int argc, char** argv) {
     test_concurrent_pcoa();
 #endif
     test_concurrent_permanova_inmem();
-    // must stay last; see the comment on the function
-    test_concurrent_matrix_inmem_reporting();
 
     printf("\n");
     printf(" %i / %i suites failed\n", suites_failed, suites_run);

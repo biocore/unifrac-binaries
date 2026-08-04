@@ -283,11 +283,6 @@ them. Benign — detection is a pure function of the environment and every write
 stores the same value — but a sanitizer will flag it, and with `UNIFRAC_GPU_INFO`
 or `UNIFRAC_CPU_INFO` set the informational lines can interleave.
 
-**SIGUSR1.** On non-WASM builds the first compute installs a `SIGUSR1` handler
-for progress reporting and never restores the previous disposition. Install your
-own handler after the first compute, or build the in-memory subset, which omits
-signal handling entirely.
-
 ## Older CPU support
 
 On Linux platforms, Unifrac will auto-detect the CPU generation, i.e. if it supports avx or avx2 vector instructions.

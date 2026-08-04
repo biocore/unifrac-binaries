@@ -9,107 +9,14 @@
 
 #include "tree.hpp"
 #include "biom_interface.hpp"
-#include <atomic>
 #include <cstdlib>
 #include <thread>
-#ifndef UNIFRAC_WASM
-#include <signal.h>
-#endif
-#include <stdarg.h>
 #include <algorithm>
-#ifndef UNIFRAC_WASM
-#include <pthread.h>
-#endif
 #include <unistd.h>
 
 #include "unifrac_internal.hpp"
 
-/* CPU_SETSIZE sizes the progress-report flag array below -- a historical
- * choice, since the flags are indexed by task id, which is bounded by the
- * stripe count and not by any CPU count.
- *
- * The fallback value of 32 is small relative to the task ids a large table can
- * produce, and UNIFRAC_WASM is also set for the native libssu_inmem.a build
- * (see inmem_build.mk), which is genuinely multi-threaded. That is harmless
- * today only because register_report_status() installs no handler there, so no
- * flag is ever set. Wiring up an API-driven progress poll for embedders would
- * need this bound revisited.
- */
-#if defined(__APPLE__) && !defined(CPU_SETSIZE)
-#define CPU_SETSIZE 32
-#endif
-#if defined(UNIFRAC_WASM) && !defined(CPU_SETSIZE)
-#define CPU_SETSIZE 32
-#endif
-
-#ifndef UNIFRAC_WASM
-static pthread_mutex_t printf_mutex = PTHREAD_MUTEX_INITIALIZER;
-#endif
-
-/* One "please report your progress" flag per task, set by the SIGUSR1
- * handler and cleared by the task that reports.
- *
- * Statically allocated on purpose: several computes may be in flight in one
- * process, so this state must not be allocated or freed per compute -- doing so
- * used to hand one compute a dangling pointer while another was still reading
- * it. Relaxed ordering: each flag is a standalone notification that orders
- * nothing else, so it compiles to a plain load/store with no lock prefix.
- */
-static std::atomic<bool> report_status[CPU_SETSIZE];
-static_assert(std::atomic<bool>::is_always_lock_free,
-              "report_status is written from a signal handler, so it must be lock-free");
-
-static int sync_printf(const char *format, ...) {
-    // https://stackoverflow.com/a/23587285/19741
-    va_list args;
-    va_start(args, format);
-
-#ifndef UNIFRAC_WASM
-    pthread_mutex_lock(&printf_mutex);
-    int cnt = vprintf(format, args);
-    pthread_mutex_unlock(&printf_mutex);
-#else
-    // single-threaded WASM: no lock needed
-    int cnt = vprintf(format, args);
-#endif
-
-    va_end(args);
-    return cnt;
-}
-
-#ifndef UNIFRAC_WASM
-static void sig_handler(int signo) {
-    // http://www.thegeekstuff.com/2012/03/catch-signals-sample-c-code
-    if (signo == SIGUSR1) {
-        for(int i = 0; i < CPU_SETSIZE; i++) {
-            report_status[i].store(true, std::memory_order_relaxed);
-        }
-    }
-}
-#endif // UNIFRAC_WASM (sig_handler not used; WASM has no signals)
-
 using namespace su;
-
-void su::try_report(const su::task_parameters* task_p, unsigned int k, unsigned int max_k) {
-  const unsigned int tid = task_p->tid;
-  // more tasks than flags is legal (n_substeps is bounded by the stripe count,
-  // not by CPU_SETSIZE); those tasks simply do not report progress
-  if(__builtin_expect(tid >= CPU_SETSIZE, false)) return;
-  if(__builtin_expect(report_status[tid].load(std::memory_order_relaxed), false)) {
-    sync_printf("tid:%u\tstart:%u\tstop:%u\tk:%u\ttotal:%u\n", tid, task_p->start, task_p->stop, k, max_k);
-    report_status[tid].store(false, std::memory_order_relaxed);
-  }
-}
-
-void su::register_report_status() {
-#ifndef UNIFRAC_WASM
-    static std::atomic<bool> handler_installed(false);
-    if (!handler_installed.exchange(true)) {
-        if (signal(SIGUSR1, sig_handler) == SIG_ERR)
-            fprintf(stderr, "Can't catch SIGUSR1\n");
-    }
-#endif
-}
 
 template<class TFloat>
 PropStack<TFloat>::PropStack(uint32_t vecsize) 
