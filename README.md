@@ -252,8 +252,8 @@ Two traps worth knowing, even single-threaded:
 2.8e-16 measured on the 6-sample fixture, against ~0.5 for a changed seed. A
 PERMANOVA p-value is a rank over `n_perm + 1` values, counting the unpermuted
 one, so it instead either holds or steps by `1/(n_perm + 1)`. Reproducible, but
-not a bitwise cache key. On a GPU one of those steps is already spent on a
-dependency bug — see [Known issues](#known-issues).
+not a bitwise cache key. On a GPU one of those steps is already spent on
+[scikit-bio-binaries#15](https://github.com/scikit-bio/scikit-bio-binaries/issues/15).
 
 **A seeded PERMANOVA also reproduces per thread count, not across thread
 counts,** for a different reason than the subsample below. scikit-bio-binaries
@@ -323,26 +323,6 @@ If more than one GPU is present, one can select the one to use by setting:
     export ACC_DEVICE_NUM=gpunum
 
 Note that there is no GPU support for MacOS.
-
-### Known issues
-
-**A PERMANOVA p-value computed on a GPU counts one uninitialized value.** This
-affects a single ordinary call, not just concurrent ones. scikit-bio-binaries
-sizes the device buffer for the permuted pseudo-F values at `n_perm` while
-launching its kernel over `n_perm + 1` groupings, so the kernel writes one
-element past that buffer and the last permutation is never copied back to the
-host — the counting loop then reads whatever was on the heap. One of the
-`n_perm + 1` counts is therefore garbage, which shifts the p-value by
-`1/(n_perm + 1)` whenever the garbage compares differently from the true value.
-`fstat` is the unpermuted statistic and is unaffected. Run one at a time the
-garbage tends to be stable, so results look reproducible; run several computes
-concurrently and they stop agreeing.
-
-This is
-[scikit-bio-binaries#15](https://github.com/scikit-bio/scikit-bio-binaries/issues/15).
-Until it is fixed, set `SKBB_USE_GPU=N` (or `UNIFRAC_USE_GPU=N`, which also
-forces the dependency to the CPU) if you need an exact p-value. CPU builds are
-not affected.
 
 ## Additional timing information
 
