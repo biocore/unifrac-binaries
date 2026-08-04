@@ -81,7 +81,12 @@ void usage() {
     std::cout << std::endl;
 }
 
-const char* compute_status_messages[9] = {"No error.",
+/* Indexed by ComputeStatus, so it needs one entry per enumerator. The bound is
+ * left off and asserted instead: status_enum.hpp is append-only for ABI, and a
+ * new status used to silently make this table short by one, turning any error
+ * report for it into an out-of-bounds read.
+ */
+const char* compute_status_messages[] = {"No error.",
                                           "The tree file cannot be found.", 
                                           "The table file cannot be found.",
                                           "The table file contains an empty table.",
@@ -89,7 +94,12 @@ const char* compute_status_messages[9] = {"No error.",
                                           "Table observation IDs are not a subset of the tree tips. This error can also be triggered if a node name contains a single quote (this is unlikely).",
                                           "Error creating the output.",
                                           "The requested method is not supported.",
-                                          "The grouping file cannot be found or does not have the necessary data."};
+                                          "The grouping file cannot be found or does not have the necessary data.",
+                                          "Device-resident input and output are not supported."};
+static_assert(sizeof(compute_status_messages) / sizeof(compute_status_messages[0])
+                  == unsupported_device + 1,
+              "compute_status_messages needs one entry per ComputeStatus; "
+              "unsupported_device must remain the last enumerator");
 
 
 // https://stackoverflow.com/questions/8401777/simple-glob-in-c-on-unix-system
