@@ -1193,17 +1193,15 @@ void find_eigens_fast_p32(const uint32_t n_samples, const uint32_t n_dims,float 
 // eigenvalues - out, alocated buffer of size n_dims
 // samples     - out, alocated buffer of size n_dims x n_samples
 // proportion_explained - out, allocated buffer of size n_dims
+//
+// Not EXTERN, and so not wrapped in ../combined/libssu.c: reachable by linking
+// src/libssu.so or one of the static archives directly, not through the
+// installed dispatcher.
 void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double **eigenvalues, double **samples, double **proportion_explained);
 void pcoa_fp32(const float * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
 void pcoa_mixed(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
 
-/* Per-call-seeded variants of the three above; seed as for
- * one_off_matrix_inmem_v4.
- *
- * C++ linkage and no dispatcher wrapper, matching the non-seeded pcoa* they
- * extend: like those, they are reachable only by linking src/libssu.so directly
- * or one of the static archives, not through the installed dispatcher.
- */
+// Per-call-seeded variants of the three above; seed as for one_off_matrix_inmem_v4.
 void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double **eigenvalues, double **samples, double **proportion_explained);
 void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
 void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);

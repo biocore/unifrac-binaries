@@ -896,6 +896,18 @@ compute_status one_off_matrix_inmem_v4(const support_biom_t *table_data, const s
     return one_off_matrix_v4_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,seed,mmap_dir,result);
 }
 
+/* Superseded by v4, but implemented here rather than in api_compat.hpp: this is
+ * one of the entry points ../combined/libssu.c resolves by dlsym, and that
+ * dispatcher loads a variant versioned independently of itself.
+ */
+compute_status one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                       const char* unifrac_method, bool variance_adjust, double alpha,
+                                       bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                       unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                       mat_full_fp64_t** result) {
+    return one_off_matrix_inmem_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,/*device_id*/ -1,mmap_dir,result);
+}
+
 compute_status one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                             const char* unifrac_method, bool variance_adjust, double alpha,
                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
@@ -937,6 +949,15 @@ compute_status one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, co
     VALIDATE_TREE_TABLE(tree,table)
 
     return one_off_matrix_v4_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,seed,mmap_dir,result);
+}
+
+// see one_off_matrix_inmem_v3
+compute_status one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                            const char* unifrac_method, bool variance_adjust, double alpha,
+                                            bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                            unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                            mat_full_fp32_t** result) {
+    return one_off_matrix_inmem_fp32_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,/*device_id*/ -1,mmap_dir,result);
 }
 
 compute_status faith_pd_inmem(const support_biom_t *table_data,

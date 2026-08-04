@@ -201,19 +201,7 @@ ComputeStatus one_off_wtree_v3(const char* biom_filename, const opaque_bptree_t*
 
 /*********************************************************************/
 
-static ComputeStatus (*dl_one_off_matrix_inmem_v4)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
-                                                   bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp64_t**) = NULL;
-static ComputeStatus (*dl_one_off_matrix_inmem_fp32_v4)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
-                                                        bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp32_t**) = NULL;
-/* v3 is dispatched here as well as v4, and must stay that way. This library
- * dlopens a variant that is versioned independently of it, so resolving v3 by
- * dlsym is what lets a variant predating v4 keep answering v3 calls. Letting
- * api_compat.hpp forward v3 to v4 instead would make every v3 call require a
- * v4 symbol in the variant, and ssu_load() exits the process when a symbol is
- * missing. UNIFRAC_COMPAT_SKIP_INMEM_V3, defined above the include at the
- * bottom of this file, keeps the two definitions from colliding.
- */
-static ComputeStatus (*dl_one_off_matrix_inmem_v3)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
+static ComputeStatus (*dl_one_off_matrix_inmem_v3)(const support_biom_t *, const support_bptree_t *, const char*, bool, double, 
                                                    bool, bool, unsigned int, unsigned int, bool, const char *, mat_full_fp64_t**) = NULL;
 static ComputeStatus (*dl_one_off_matrix_inmem_fp32_v3)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
                                                         bool, bool, unsigned int, unsigned int, bool, const char *, mat_full_fp32_t**) = NULL;
@@ -221,8 +209,7 @@ static ComputeStatus (*dl_one_off_matrix_inmem_fp32_v3)(const support_biom_t *, 
 ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                              const char* unifrac_method, bool variance_adjust, double alpha,
                                              bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                             unsigned int subsample_depth, bool subsample_with_replacement,
-                                             const char *mmap_dir,
+                                             unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
                                              mat_full_fp64_t** result) {
    cond_ssu_load("one_off_matrix_inmem_v3", (void **) &dl_one_off_matrix_inmem_v3);
 
@@ -233,14 +220,18 @@ ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const su
 ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                                   const char* unifrac_method, bool variance_adjust, double alpha,
                                                   bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                                  unsigned int subsample_depth, bool subsample_with_replacement,
-                                                  const char *mmap_dir,
+                                                  unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
                                                   mat_full_fp32_t** result) {
    cond_ssu_load("one_off_matrix_inmem_fp32_v3", (void **) &dl_one_off_matrix_inmem_fp32_v3);
 
    return (*dl_one_off_matrix_inmem_fp32_v3)(table_data, tree_data, unifrac_method, variance_adjust, alpha,
                                       bypass_tips, normalize_sample_counts, n_substeps, subsample_depth, subsample_with_replacement, mmap_dir, result);
 }
+
+static ComputeStatus (*dl_one_off_matrix_inmem_v4)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
+                                                   bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp64_t**) = NULL;
+static ComputeStatus (*dl_one_off_matrix_inmem_fp32_v4)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
+                                                        bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp32_t**) = NULL;
 
 ComputeStatus one_off_matrix_inmem_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                              const char* unifrac_method, bool variance_adjust, double alpha,
@@ -685,9 +676,6 @@ IOStatus write_partial(const char* filename, const partial_mat_t* result) {
 
 // compat versions
 
-// one_off_matrix_inmem{,_fp32}_v3 are dispatched above rather than forwarded to
-// v4 here; see the note beside them for why that matters to older variants.
-#define UNIFRAC_COMPAT_SKIP_INMEM_V3 1
 #include "../src/api_compat.hpp"
 
 
