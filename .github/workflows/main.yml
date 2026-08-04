@@ -187,13 +187,21 @@ jobs:
         make -j$(nproc) inmem_static INMEM_SKBB_EXTERN=$CONDA_PREFIX/include/scikit-bio-binaries
         # the archive must actually export what embedders call, including the
         # seeded v4 entries -- a dropped TU would otherwise surface downstream
-        nm -g --defined-only libssu_inmem.a > /tmp/inmem_syms
+        nm -g  --defined-only libssu_inmem.a > /tmp/inmem_syms
+        nm -gC --defined-only libssu_inmem.a > /tmp/inmem_syms_demangled
+        # EXTERN "C" entries: the symbol name is the whole name
         for sym in one_off_matrix_inmem_fp32_v3 one_off_matrix_inmem_fp32_v4 \
                    one_off_matrix_inmem_v3 one_off_matrix_inmem_v4 faith_pd_inmem \
                    compute_permanova_inmem_fp64_seeded \
-                   compute_permanova_inmem_fp32_seeded \
-                   pcoa_seeded pcoa_fp32_seeded pcoa_mixed_seeded; do
+                   compute_permanova_inmem_fp32_seeded; do
           grep -q " T ${sym}$" /tmp/inmem_syms \
+            || { echo "MISSING SYMBOL: ${sym}"; exit 2; }
+        done
+        # pcoa* carry C++ linkage, matching the non-seeded pcoa* they extend, so
+        # the archive holds mangled names. Match the demangled signature instead
+        # -- still a real check that the TU is present, just spelled correctly.
+        for sym in pcoa_seeded pcoa_fp32_seeded pcoa_mixed_seeded; do
+          grep -q " T ${sym}(" /tmp/inmem_syms_demangled \
             || { echo "MISSING SYMBOL: ${sym}"; exit 2; }
         done
         popd
