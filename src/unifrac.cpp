@@ -339,22 +339,6 @@ void su::stripes_to_matrix_fp32(const ManagedStripes &stripes, const uint32_t n_
 }
 
 
-void progressbar(float progress) {
-    // from http://stackoverflow.com/a/14539953
-    //
-    // could encapsulate into a classs for displaying time elapsed etc
-    int barWidth = 70;
-    std::cout << "[";
-    int pos = barWidth * progress;
-    for (int i = 0; i < barWidth; ++i) {
-        if (i < pos) std::cout << "=";
-        else if (i == pos) std::cout << ">";
-        else std::cout << " ";
-    }
-    std::cout << "] " << int(progress * 100.0) << " %\r";
-    std::cout.flush();
-}
-
 // Computes Faith's PD for the samples in  `table` over the phylogenetic
 // tree given by `tree`.
 // Assure that tree does not contain ids that are not in table
