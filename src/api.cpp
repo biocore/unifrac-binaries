@@ -1256,8 +1256,8 @@ inline compute_status compute_permanova_T(const char *grouping_filename, unsigne
          return grouping_missing;
        }
 
-       // seed < 0: the file-based permanova path predates the per-call seed
-       // and is documented as concurrency-unsafe in README.md
+       // seed < 0: the file-based permanova path has no per-call seed and is
+       // documented as concurrency-unsafe in README.md
        su::permanova(result->matrix, n_samples,
                      grouping, permanova_perms,
                      fstats[i], pvalues[i], /*seed*/ -1);
@@ -1659,8 +1659,8 @@ public:
          TReal * samples;
          TReal * proportion_explained;
 
-         // seed < 0: this path predates the per-call seed and is documented
-         // as concurrency-unsafe in README.md
+         // seed < 0: this path has no per-call seed and is documented as
+         // concurrency-unsafe in README.md
          su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained, /*seed*/ -1);
          TDBG_STEP("pcoa computed")
 

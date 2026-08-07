@@ -2084,10 +2084,9 @@ namespace concurrency_fixture {
     static const double       FSTAT_TOL  = 1e-6;
     /* A p-value is a rank over n_perm+1 pseudo-F values, so its quantum is
      * 1/(n_perm+1) and README's contract promises only that it holds or steps
-     * by one. Budget one step. The old 1e-2 bound was both tighter than that
-     * contract and arbitrary: it sits exactly on the quantum, so whether a
-     * one-count step was accepted depended on how k/100 happened to round --
-     * 80 of the 99 adjacent pairs exceeded it, 19 did not.
+     * by one. Budget one step. A 1e-2 bound is both tighter than that contract
+     * and arbitrary: it sits exactly on the quantum, so whether a one-count
+     * step is accepted comes down to how k/100 happens to round.
      *
      * One mechanism can spend that step here, and it is not ours:
      * scikit-bio/scikit-bio-binaries#15 leaves the last permutation's pseudo-F
@@ -2096,10 +2095,9 @@ namespace concurrency_fixture {
      * not when they overlap.
      *
      * ULP drift in skbb's s_T reduction could in principle flip a count too,
-     * but measured at a fixed OpenMP width it does not on this fixture: over
-     * 500 repeats per width, fstat takes two values ~9e-16 apart and the
-     * p-value takes exactly one. (Across *different* widths the p-value does
-     * move, but for an unrelated reason -- see the note on width in
+     * but at a fixed OpenMP width it does not on this fixture: fstat varies by
+     * ~1e-15 and the p-value not at all. (Across *different* widths the p-value
+     * does move, but for an unrelated reason -- see the note on width in
      * test_concurrent_permanova_inmem.)
      *
      * fstat is the unpermuted statistic, so it never sees the permutation
@@ -2229,12 +2227,10 @@ void test_concurrent_permanova_inmem() {
      * and that depends on the fixture, ORD_SEED and PERM_PERMS -- all of which
      * can be edited without anyone rechecking a comment. Checked over a spread
      * of seeds, as test_permanova_seeded does in test_ska.cpp: a p-value is a
-     * rank, so any single pair of seeds may legitimately agree. Measured here,
-     * 49 of 59 alternative seeds clear the bound.
+     * rank, so any single pair of seeds may legitimately agree.
      *
-     * Note this also means the p-value is the only half of the check that sees
-     * the seed: ref_fstat is the unpermuted statistic and was bit-identical for
-     * all 59.
+     * Only the p-value sees the seed here: ref_fstat is the unpermuted
+     * statistic and does not depend on it.
      */
     {
         unsigned int differing = 0;

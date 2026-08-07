@@ -129,9 +129,8 @@ test_concurrency_inmem: $(INMEM_TEST_DEPS) libssu_inmem.a
 inmem_test: test_concurrency_inmem
 	./test_concurrency_inmem
 
-# ASan variant. A plain run only catches a fault that happens to land; the
-# n_substeps cases in particular corrupted the heap silently before they were
-# clamped, and only ASan called it. Three notes:
+# ASan variant. A plain run only catches a fault that happens to land, so heap
+# corruption under concurrency can pass silently without this. Three notes:
 #   - The runtime has to be preloaded even though the binary links it:
 #     libskbb.so gets initialized ahead of it and ASan then refuses to start.
 #     -static-libasan would sidestep the preload, but conda-forge's
@@ -145,8 +144,7 @@ inmem_test: test_concurrency_inmem
 #     INMEM_CXX defaults to $(CXX) -- but it must fail clearly rather than emit
 #     a binary that was never instrumented, so the target checks first.
 #     Override INMEM_ASAN_FLAGS if a compiler spells it differently.
-# The archive keeps its shipped -O3; the n_substeps overflow was confirmed to
-# report at that level.
+# The archive keeps its shipped -O3, so what is instrumented is what ships.
 INMEM_ASAN_FLAGS ?= -fsanitize=address -g
 
 # gcc reports "gcc"/"g++", clang and its derivatives report "clang" in --version

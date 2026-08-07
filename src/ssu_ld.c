@@ -64,9 +64,7 @@ static bool ssu_load_check() {
        if (!dl_handle) {
           /* Callers turn this into "GPU not detected", which conflates "no such
            * library" with "the library is there but would not load". Surface
-           * dlerror() under either info flag so the two are distinguishable;
-           * without it, diagnosing a runner that stops seeing its GPU takes
-           * several CI runs of correlation.
+           * dlerror() under either info flag so the two are distinguishable.
            */
           const char* dl_msg = dlerror();
           const char* env_cpu_info = getenv("UNIFRAC_CPU_INFO");
@@ -74,9 +72,8 @@ static bool ssu_load_check() {
           /* Once per variant per process -- this file is included once per
            * SUCMP_NM, so each variant gets its own flag. Detection re-probes on
            * every call, and a variant that is present but unloadable is a
-           * standing condition rather than an event; reporting every probe
-           * added a few hundred lines to a CI log that is read to diagnose
-           * exactly this kind of problem.
+           * standing condition rather than an event, so reporting it per probe
+           * would flood the log it is meant to help read.
            */
           static bool reported = false;
           if (!reported &&

@@ -138,8 +138,8 @@ static void faith_pd_worker(outcome* out) {
 }
 
 /* Ordination under the same treatment. These entry points are declared outside
- * every UNIFRAC_WASM guard, so they compile into this archive -- but nothing
- * proved they link and run in it until this ran here.
+ * every UNIFRAC_WASM guard, so they compile into this archive; this is what
+ * pins that they also link and run in it.
  *
  * Tolerance, not bit-exact; see "Ordination reproduces to a tolerance" in
  * README.md. The bound is far tighter than the signal: changing the seed moves
@@ -299,8 +299,6 @@ int main(void) {
     CHECK(ref_pvalue > 0.0 && ref_pvalue <= 1.0);
 
     /* The permanova seed is really consumed, and PVALUE_TOL still discriminates.
-     * The pcoa block above has had this since it was written; permanova did not,
-     * which only came to light when a comment in test_su.cpp claimed it did.
      * Spread of seeds rather than one alternative, as in test_ska.cpp's
      * test_permanova_seeded: a p-value is a rank, so any single pair can agree.
      * fstat is the unpermuted statistic and does not move with the seed at all,
@@ -325,9 +323,8 @@ int main(void) {
                 "concurrent compute_permanova_inmem_fp64_seeded");
 
     // ---- n_substeps outside the stripe range ---------------------------
-    /* 6 samples -> 3 stripes. 0 used to divide by zero and 4 used to run off
-     * the end of the stripe array; both are clamped now, and neither changes
-     * the answer.
+    /* 6 samples -> 3 stripes. Unclamped, 0 divides by zero and 4 runs off the
+     * end of the stripe array; both are clamped, and neither changes the answer.
      */
     for (unsigned int n_substeps : {0u, 1u, 3u, 4u}) {
         std::vector<float> got;

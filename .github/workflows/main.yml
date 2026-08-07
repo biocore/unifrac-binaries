@@ -125,11 +125,8 @@ jobs:
           unset DEBUG_CFLAGS
           # the r-base package has a broken dependency
           ln -s $CONDA_PREFIX/lib/libreadline.so $CONDA_PREFIX/lib/libreadline.so.6
-          # cloud.r-project.org, not a single university mirror: on 2026-08-01
-          # lib.stat.cmu.edu started returning an unreadable PACKAGES index, so
-          # install.packages reported "package 'Rcpp' is not available for this
-          # version of R" and rapi_test failed on whichever legs happened to hit
-          # it -- the GPU leg in run 30717704778, an arm leg in 30718905872.
+          # a CDN, not a single university mirror: one stale PACKAGES index
+          # there makes Rcpp look unavailable and fails whichever legs hit it
           R -e 'install.packages("Rcpp", repos="https://cloud.r-project.org")'
           make rapi_test
         fi
@@ -157,10 +154,9 @@ jobs:
   # skbb comes from conda-forge, headers and library from the same package,
   # so this job needs no second checkout.
   #
-  # Note for anyone adding a TSan gate later: TSan reports ~145 warnings
-  # against uninstrumented libgomp with a *single* caller thread at
-  # OMP_NUM_THREADS=4, and zero at 1 -- they are present in today's serial
-  # usage too. ASan plus concurrent computes is what caught the real bug.
+  # A TSan gate added here would need OMP_NUM_THREADS=1: uninstrumented libgomp
+  # yields ~145 findings at width 4 even with a single caller thread, and none
+  # at width 1.
   build-and-test-inmem:
     runs-on: ubuntu-latest
     steps:

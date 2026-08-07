@@ -774,7 +774,7 @@ void test_permanova_seeded() {
     ASSERT(fabs(a - c) < SAME);
 
     /* The seed is really consumed. Checked across a spread of seeds rather than
-     * against one alternative: a p-value is a rank out of n_perm, so any two
+     * against one alternative: a p-value is a rank out of n_perm+1, so any two
      * seeds can legitimately land on the same one. Requiring that *some* seed
      * disagrees keeps the assertion honest without making it a coin flip.
      */

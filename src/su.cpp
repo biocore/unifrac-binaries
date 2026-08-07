@@ -82,9 +82,9 @@ void usage() {
 }
 
 /* Indexed by ComputeStatus, so it needs one entry per enumerator. The bound is
- * left off and asserted instead: status_enum.hpp is append-only for ABI, and a
- * new status used to silently make this table short by one, turning any error
- * report for it into an out-of-bounds read.
+ * left off and asserted instead: status_enum.hpp is append-only for ABI, so a
+ * status appended without a matching entry here would leave this table short by
+ * one and turn any error report for it into an out-of-bounds read.
  */
 const char* compute_status_messages[] = {"No error.",
                                           "The tree file cannot be found.", 

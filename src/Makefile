@@ -201,21 +201,9 @@ test_su: test_su.cpp api.hpp tree.o tsv.o biom.o biom_inmem.o biom_subsampled.o 
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) test_su.cpp -o $@ tree.o biom.o biom_inmem.o biom_subsampled.o tsv.o $(UNIFRAC_FILES) unifrac.o skbio_alt.o api.o -llz4 $(SKBBLIB) -lpthread
 # then exercise the optimized code through the API interface
 #
-# Links -l$(SSU) and nothing else, on purpose: this binary is also the check
-# that a consumer of the shared library needs no other flag. Do not add
-# $(SKBBLIB) or -lpthread. With -DAPI_ONLY=1 nothing here should need a skbb
-# symbol, so an undefined reference means the test reached past the public API
-# and that is what to fix. A test needing threads of its own belongs in test_su,
-# which links the objects directly.
-#
-# Adding a library here is not free even when it links. On the linux-gpu-cuda
-# runner, binaries linking libskbb directly report "NVIDIA GPU not detected"
-# while ones that do not report it detected: test_api (no -lskbb) detected it on
-# all four runs of 2026-07-31, test_su (always -lskbb) on none, and test_su_api
-# flipped to undetected when $(SKBBLIB) was briefly added and back when removed.
-# Cause not established -- skbb loads its backend with dlmopen, so two CUDA
-# runtimes in separate namespaces is the suspect. The effect is that the whole
-# suite silently stops running on the GPU.
+# Links -l$(SSU) and nothing else, on purpose: this binary doubles as the check
+# that a consumer of the shared library needs no other flag. With -DAPI_ONLY=1
+# an undefined reference here means the test reached past the public API.
 test_su_api: test_su.cpp test_helper.hpp api.hpp $(PREFIX)/lib/lib$(SSU).so
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) -DAPI_ONLY=1 test_su.cpp -o $@ -l$(SSU)
 
