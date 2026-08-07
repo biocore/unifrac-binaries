@@ -13,7 +13,6 @@
 #include <unordered_map>
 #include <cstdlib>
 #include <thread>
-#include <signal.h>
 #include <stdarg.h>
 #include <algorithm>
 #include <pthread.h>
@@ -340,22 +339,6 @@ void su::stripes_to_matrix_fp32(const ManagedStripes &stripes, const uint32_t n_
 }
 
 
-void progressbar(float progress) {
-    // from http://stackoverflow.com/a/14539953
-    //
-    // could encapsulate into a classs for displaying time elapsed etc
-    int barWidth = 70;
-    std::cout << "[";
-    int pos = barWidth * progress;
-    for (int i = 0; i < barWidth; ++i) {
-        if (i < pos) std::cout << "=";
-        else if (i == pos) std::cout << ">";
-        else std::cout << " ";
-    }
-    std::cout << "] " << int(progress * 100.0) << " %\r";
-    std::cout.flush();
-}
-
 // Computes Faith's PD for the samples in  `table` over the phylogenetic
 // tree given by `tree`.
 // Assure that tree does not contain ids that are not in table
@@ -526,10 +509,6 @@ void su::process_stripes(biom_interface &table,
                          std::vector<double*> &dm_stripes_total,
                          std::vector<su::task_parameters> &tasks) {
 
-    // register a signal handler so we can ask the master thread for its
-    // progress
-    register_report_status();
-
     // cannot use threading with openacc or openmp
     for(unsigned int tid = 0; tid < tasks.size(); tid++) {
         if(variance_adjust)
@@ -549,6 +528,4 @@ void su::process_stripes(biom_interface &table,
                                        std::ref(dm_stripes_total),
                                        &tasks[tid]);
     }
-
-    remove_report_status();
 }

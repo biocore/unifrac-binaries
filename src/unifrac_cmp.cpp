@@ -139,8 +139,6 @@ inline void unifracTT(const su::biom_interface &table,
           taskObj.sync_lengths(filled_emb);
           taskObj._run(filled_emb);
           filled_emb=0;
-
-          su::try_report(task_p, k, max_k);
     }
 
     taskObj.wait_completion();
@@ -269,8 +267,6 @@ inline void unifrac_vawTT(const su::biom_interface &table,
           taskObj.sync_embedded(filled_emb);
           taskObj._run(filled_emb);
           filled_emb = 0;
-
-          su::try_report(task_p, k, max_k);
     }
 
     taskObj.wait_completion();

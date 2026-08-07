@@ -18,11 +18,6 @@
 #include "unifrac.hpp"
 
 namespace su {
- // helper reporting functions
- void register_report_status();
- void remove_report_status();
- void try_report(const su::task_parameters* task_p, unsigned int k, unsigned int max_k);
-
  template<class TFloat>
  class PropStack {
    private:

@@ -11,95 +11,12 @@
 #include "biom_interface.hpp"
 #include <cstdlib>
 #include <thread>
-#ifndef UNIFRAC_WASM
-#include <signal.h>
-#endif
-#include <stdarg.h>
 #include <algorithm>
-#ifndef UNIFRAC_WASM
-#include <pthread.h>
-#endif
 #include <unistd.h>
 
 #include "unifrac_internal.hpp"
 
-#if defined(__APPLE__) && !defined(CPU_SETSIZE)
-#define CPU_SETSIZE 32
-#endif
-#if defined(UNIFRAC_WASM) && !defined(CPU_SETSIZE)
-#define CPU_SETSIZE 32
-#endif
-
-#ifndef UNIFRAC_WASM
-static pthread_mutex_t printf_mutex = PTHREAD_MUTEX_INITIALIZER;
-#endif
-static bool* report_status;
-
-static int sync_printf(const char *format, ...) {
-    // https://stackoverflow.com/a/23587285/19741
-    va_list args;
-    va_start(args, format);
-
-#ifndef UNIFRAC_WASM
-    pthread_mutex_lock(&printf_mutex);
-    int cnt = vprintf(format, args);
-    pthread_mutex_unlock(&printf_mutex);
-#else
-    // single-threaded WASM: no lock needed
-    int cnt = vprintf(format, args);
-#endif
-
-    va_end(args);
-    return cnt;
-}
-
-#ifndef UNIFRAC_WASM
-static void sig_handler(int signo) {
-    // http://www.thegeekstuff.com/2012/03/catch-signals-sample-c-code
-    if (signo == SIGUSR1) {
-        if(report_status == NULL)
-            fprintf(stderr, "Cannot report status.\n");
-        else {
-            for(int i = 0; i < CPU_SETSIZE; i++) {
-                report_status[i] = true;
-            }
-        }
-    }
-}
-#endif // UNIFRAC_WASM (sig_handler not used; WASM has no signals)
-
 using namespace su;
-
-void su::try_report(const su::task_parameters* task_p, unsigned int k, unsigned int max_k) {
-  if(__builtin_expect(report_status[task_p->tid], false)) {
-    sync_printf("tid:%u\tstart:%u\tstop:%u\tk:%u\ttotal:%u\n", task_p->tid, task_p->start, task_p->stop, k, max_k);
-    report_status[task_p->tid] = false;
-  }
-}
-
-void su::register_report_status() {
-#ifndef UNIFRAC_WASM
-    // register a signal handler so we can ask the master thread for its
-    // progress
-    if (signal(SIGUSR1, sig_handler) == SIG_ERR)
-        fprintf(stderr, "Can't catch SIGUSR1\n");
-#endif
-
-    report_status = (bool*)calloc(sizeof(bool), CPU_SETSIZE);
-#ifndef UNIFRAC_WASM
-    pthread_mutex_init(&printf_mutex, NULL);
-#endif
-}
-
-void su::remove_report_status() {
-    if(report_status != NULL) {
-#ifndef UNIFRAC_WASM
-        pthread_mutex_destroy(&printf_mutex);
-#endif
-        free(report_status);
-        report_status = NULL;
-    }
-}
 
 template<class TFloat>
 PropStack<TFloat>::PropStack(uint32_t vecsize) 

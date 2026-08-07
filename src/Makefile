@@ -200,6 +200,10 @@ test_binaries: test_su test_ska test_api test_su_api
 test_su: test_su.cpp api.hpp tree.o tsv.o biom.o biom_inmem.o biom_subsampled.o unifrac.o skbio_alt.o api.o $(UNIFRAC_FILES)
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) test_su.cpp -o $@ tree.o biom.o biom_inmem.o biom_subsampled.o tsv.o $(UNIFRAC_FILES) unifrac.o skbio_alt.o api.o -llz4 $(SKBBLIB) -lpthread
 # then exercise the optimized code through the API interface
+#
+# Links -l$(SSU) and nothing else, on purpose: this binary doubles as the check
+# that a consumer of the shared library needs no other flag. With -DAPI_ONLY=1
+# an undefined reference here means the test reached past the public API.
 test_su_api: test_su.cpp test_helper.hpp api.hpp $(PREFIX)/lib/lib$(SSU).so
 	h5c++ $(CPPFLAGS) $(EXEFLAGS) -DAPI_ONLY=1 test_su.cpp -o $@ -l$(SSU)
 

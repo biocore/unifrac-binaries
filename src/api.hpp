@@ -1,3 +1,6 @@
+#ifndef __UNIFRAC_API_H
+#define __UNIFRAC_API_H 1
+
 #include "task_parameters.hpp"
 #include "status_enum.hpp"
 
@@ -13,10 +16,35 @@
 
 /*
  *
- * Note: Each function declared EXTERN must both have 
+ * Note: Each function declared EXTERN must both have
  *       an implementation in api.cpp, AND
  *       a wrapper in ../combined/libssu.c
  *
+ */
+
+/*
+ * Concurrency
+ * -----------
+ * Several computes may be in flight in one process. These may be called
+ * concurrently, each with seed >= 0 (or subsample_depth == 0, which draws
+ * nothing); input tables, trees and distance matrices are read-only and may be
+ * shared:
+ *
+ *   one_off_matrix_inmem_v4 / _fp32_v4
+ *   faith_pd_inmem
+ *   subsample_table_inmem_seeded
+ *   pcoa_seeded / pcoa_fp32_seeded / pcoa_mixed_seeded
+ *   compute_permanova_inmem_fp64_seeded / _fp32_seeded
+ *
+ * ssu_set_random_seed, and any of the above at seed < 0, go through
+ * process-global RNG state and may not. That includes every non-seeded form,
+ * each of which is defined as its seeded form at seed = -1. GPU/ACC builds are
+ * not covered.
+ *
+ * README.md, "Calling the library concurrently", is the full contract: what the
+ * ordination entry points do and do not promise about reproducibility, why a
+ * seeded subsample reproduces per thread count only, and the detection caches a
+ * sanitizer will flag.
  */
 
 #define PARTIAL_MAGIC "SSU-PARTIAL-01"
@@ -316,14 +344,34 @@ EXTERN ComputeStatus one_off_wtree(const char* biom_filename, const opaque_bptre
  * n_substeps <uint> the number of substeps to use.
  * subsample_depth <uint> Depth of subsampling, if >0
  * subsample_with_replacement <bool> Use subsampling with replacement? (only True supported)
+ * seed <int> Subsampling seed. If >= 0, the draw is deterministic in this
+ *      argument alone and touches no shared state, so concurrent callers need
+ *      no lock and each gets a reproducible result. If < 0, the draw comes from
+ *      the process-global RNG that ssu_set_random_seed() sets, which is what v3
+ *      always did. Ignored when subsample_depth is 0, since nothing is drawn.
+ * device_id <int> Where the input (table, tree) and output (distance matrix)
+ *      memory lives. < 0 is host memory, the only mode implemented today.
+ *      >= 0 names an accelerator device and currently returns
+ *      unsupported_device without computing anything.
  * mmap_dir <const char*> If not NULL, area to use for temp memory storage
  * result <mat_full_fp64_t**> the resulting distance matrix in full form, this is initialized within the method so using **
  *
  * one_off_inmem returns the following error codes:
  *
- * okay           : no problems encountered
- * unknown_method : the requested method is unknown.
- * table_empty    : the table does not have any entries
+ * okay               : no problems encountered
+ * unknown_method     : the requested method is unknown.
+ * table_empty        : the table does not have any entries
+ * unsupported_device : device_id >= 0, which is not implemented yet
+ */
+EXTERN ComputeStatus one_off_matrix_inmem_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                             const char* unifrac_method, bool variance_adjust, double alpha,
+                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                             unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                             int device_id, const char *mmap_dir,
+                                             mat_full_fp64_t** result);
+
+/* Older version, will be deprecated in the future.
+ * Equivalent to one_off_matrix_inmem_v4 with seed = -1 and device_id = -1.
  */
 EXTERN ComputeStatus one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                              const char* unifrac_method, bool variance_adjust, double alpha,
@@ -355,14 +403,27 @@ EXTERN ComputeStatus one_off_inmem(const support_biom_t *table_data, const suppo
  * n_substeps <uint> the number of substeps to use.
  * subsample_depth <uint> Depth of subsampling, if >0
  * subsample_with_replacement <bool> Use subsampling with replacement? (only True supported)
+ * seed <int> Subsampling seed, as for one_off_matrix_inmem_v4.
+ * device_id <int> Memory placement, as for one_off_matrix_inmem_v4.
  * mmap_dir <const char*> If not NULL, area to use for temp memory storage
  * result <mat_full_fp32_t**> the resulting distance matrix in full form, this is initialized within the method so using **
  *
  * one_off_inmem returns the following error codes:
  *
- * okay           : no problems encountered
- * unknown_method : the requested method is unknown.
- * table_empty    : the table does not have any entries
+ * okay               : no problems encountered
+ * unknown_method     : the requested method is unknown.
+ * table_empty        : the table does not have any entries
+ * unsupported_device : device_id >= 0, which is not implemented yet
+ */
+EXTERN ComputeStatus one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                                  const char* unifrac_method, bool variance_adjust, double alpha,
+                                                  bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                                  unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                                  int device_id, const char *mmap_dir,
+                                                  mat_full_fp32_t** result);
+
+/* Older version, will be deprecated in the future.
+ * Equivalent to one_off_matrix_inmem_fp32_v4 with seed = -1 and device_id = -1.
  */
 EXTERN ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                                   const char* unifrac_method, bool variance_adjust, double alpha,
@@ -745,6 +806,25 @@ EXTERN ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int
                                                   unsigned int permanova_perms,
                                                   float *fstat, float *pvalue);
 
+/* Per-call-seeded variants of compute_permanova_inmem_fp64/fp32; seed governs
+ * the permutation draw, as for one_off_matrix_inmem_v4.
+ *
+ * A p-value is a rank in the permutation distribution, so it does not drift
+ * smoothly: ULP drift in the observed F either leaves it alone or steps it by
+ * 1/permanova_perms.
+ */
+EXTERN ComputeStatus compute_permanova_inmem_fp64_seeded(const double *mat, unsigned int n_dims,
+                                                         const uint32_t *grouping,
+                                                         unsigned int permanova_perms,
+                                                         int seed,
+                                                         double *fstat, double *pvalue);
+
+EXTERN ComputeStatus compute_permanova_inmem_fp32_seeded(const float *mat, unsigned int n_dims,
+                                                         const uint32_t *grouping,
+                                                         unsigned int permanova_perms,
+                                                         int seed,
+                                                         float *fstat, float *pvalue);
+
 /* Write a matrix object using the text format
  *
  * filename <const char*> the file to write into
@@ -1113,9 +1193,18 @@ void find_eigens_fast_p32(const uint32_t n_samples, const uint32_t n_dims,float 
 // eigenvalues - out, alocated buffer of size n_dims
 // samples     - out, alocated buffer of size n_dims x n_samples
 // proportion_explained - out, allocated buffer of size n_dims
+//
+// Not EXTERN, and so not wrapped in ../combined/libssu.c: reachable by linking
+// src/libssu.so or one of the static archives directly, not through the
+// installed dispatcher.
 void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double **eigenvalues, double **samples, double **proportion_explained);
 void pcoa_fp32(const float * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
 void pcoa_mixed(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained);
+
+// Per-call-seeded variants of the three above; seed as for one_off_matrix_inmem_v4.
+void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double **eigenvalues, double **samples, double **proportion_explained);
+void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
+void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained);
 
 
 #ifdef __cplusplus
@@ -1130,3 +1219,5 @@ void set_tasks(std::vector<su::task_parameters> &tasks,
                unsigned int n_tasks);
 
 #endif
+
+#endif /* __UNIFRAC_API_H */

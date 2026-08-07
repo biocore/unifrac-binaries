@@ -173,44 +173,44 @@ void su::find_eigens_fast(const uint32_t n_samples, const uint32_t n_dims, float
 
 // ======================= PCoA proper ========================
 
-void su::pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained) {
+void su::pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained, int seed) {
   eigenvalues = (double *) malloc(sizeof(double)*n_dims);
   samples = (double *) malloc((sizeof(double)*n_dims)*n_samples);
   proportion_explained = (double *) malloc(sizeof(double)*n_dims);
   skbio_check_acc();
-  skbb_pcoa_fsvd_fp64(n_samples, mat, n_dims, -1, eigenvalues, samples, proportion_explained);
+  skbb_pcoa_fsvd_fp64(n_samples, mat, n_dims, seed, eigenvalues, samples, proportion_explained);
 }
 
-void su::pcoa(const float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained) {
+void su::pcoa(const float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained, int seed) {
   eigenvalues = (float *) malloc(sizeof(float)*n_dims);
   samples = (float *) malloc((sizeof(float)*n_dims)*n_samples);
   proportion_explained = (float *) malloc(sizeof(float)*n_dims);
   skbio_check_acc();
-  skbb_pcoa_fsvd_fp32(n_samples, mat, n_dims, -1, eigenvalues, samples, proportion_explained);
+  skbb_pcoa_fsvd_fp32(n_samples, mat, n_dims, seed, eigenvalues, samples, proportion_explained);
 }
 
-void su::pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained) {
+void su::pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained, int seed) {
   eigenvalues = (float *) malloc(sizeof(float)*n_dims);
   samples = (float *) malloc((sizeof(float)*n_dims)*n_samples);
   proportion_explained = (float *) malloc(sizeof(float)*n_dims);
   skbio_check_acc();
-  skbb_pcoa_fsvd_fp64_to_fp32(n_samples, mat, n_dims, -1, eigenvalues, samples, proportion_explained);
+  skbb_pcoa_fsvd_fp64_to_fp32(n_samples, mat, n_dims, seed, eigenvalues, samples, proportion_explained);
 }
 
-void su::pcoa_inplace(double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained) {
+void su::pcoa_inplace(double * mat, const uint32_t n_samples, const uint32_t n_dims, double * &eigenvalues, double * &samples, double * &proportion_explained, int seed) {
   eigenvalues = (double *) malloc(sizeof(double)*n_dims);
   samples = (double *) malloc((sizeof(double)*n_dims)*n_samples);
   proportion_explained = (double *) malloc(sizeof(double)*n_dims);
   skbio_check_acc();
-  skbb_pcoa_fsvd_inplace_fp64(n_samples, mat, n_dims, -1, eigenvalues, samples, proportion_explained);
+  skbb_pcoa_fsvd_inplace_fp64(n_samples, mat, n_dims, seed, eigenvalues, samples, proportion_explained);
 }
 
-void su::pcoa_inplace(float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained) {
+void su::pcoa_inplace(float  * mat, const uint32_t n_samples, const uint32_t n_dims, float  * &eigenvalues, float  * &samples, float  * &proportion_explained, int seed) {
   eigenvalues = (float *) malloc(sizeof(float)*n_dims);
   samples = (float *) malloc((sizeof(float)*n_dims)*n_samples);
   proportion_explained = (float *) malloc(sizeof(float)*n_dims);
   skbio_check_acc();
-  skbb_pcoa_fsvd_inplace_fp32(n_samples, mat, n_dims, -1, eigenvalues, samples, proportion_explained);
+  skbb_pcoa_fsvd_inplace_fp32(n_samples, mat, n_dims, seed, eigenvalues, samples, proportion_explained);
 }
 
 //
@@ -220,17 +220,19 @@ void su::pcoa_inplace(float  * mat, const uint32_t n_samples, const uint32_t n_d
 void su::permanova(const double * mat, unsigned int n_dims,
                    const uint32_t *grouping,
                    unsigned int n_perm,
-                   double &fstat_out, double &pvalue_out) {
+                   double &fstat_out, double &pvalue_out,
+                   int seed) {
   skbio_check_acc();
-  skbb_permanova_fp64(n_dims, mat, grouping, n_perm, -1, &fstat_out, &pvalue_out);
+  skbb_permanova_fp64(n_dims, mat, grouping, n_perm, seed, &fstat_out, &pvalue_out);
 }
 
 void su::permanova(const float * mat, unsigned int n_dims,
                    const uint32_t *grouping,
                    unsigned int n_perm,
-                   float &fstat_out, float &pvalue_out) {
+                   float &fstat_out, float &pvalue_out,
+                   int seed) {
   skbio_check_acc();
-  skbb_permanova_fp32(n_dims, mat, grouping, n_perm, -1, &fstat_out, &pvalue_out);
+  skbb_permanova_fp32(n_dims, mat, grouping, n_perm, seed, &fstat_out, &pvalue_out);
 }
 
 // ======================= skbio_biom_subsampled  ================================

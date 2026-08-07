@@ -8,6 +8,7 @@
 #include "skbio_alt.hpp"
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <thread>
 #include <cstring>
 #include <stdlib.h> 
@@ -456,6 +457,45 @@ void destroy_partial_dyn_mat(partial_dyn_mat_t** result) {
 }
 
 
+/* A stripe_stop that does not make sense means "through the last stripe".
+ * set_tasks applies that default internally, and callers need the same answer to
+ * work out how many stripes their tasks are going to divide, so the rule lives
+ * in exactly one place.
+ */
+static unsigned int effective_stripe_stop(unsigned int n_samples,
+                                          unsigned int stripe_start,
+                                          unsigned int stripe_stop) {
+    return (stripe_stop <= stripe_start) ? ((n_samples + 1) / 2) : stripe_stop;
+}
+
+/* Force a caller-supplied n_substeps into the range set_tasks can actually
+ * divide the stripes into. n_substeps only says how to split that range across
+ * tasks, so out-of-range values are a request to be normalized rather than an
+ * error:
+ *
+ *   0                        divides by zero in set_tasks below
+ *   > n_stripes_in_range     leaves trailing tasks with an empty stripe range
+ *                            whose start indexes one past the end of dm_stripes
+ *                            (dereferenced unconditionally in
+ *                            UnifracTaskVector, unifrac_task.hpp)
+ *
+ * n_stripes_in_range is stripe_stop - stripe_start, the number of stripes these
+ * tasks will divide -- NOT the size of dm_stripes. The two differ for partial
+ * computes, which allocate the full stripe vector but compute a sub-range.
+ *
+ * Must be called before sizing the tasks vector, since that is sized by the
+ * returned value.
+ */
+static unsigned int clamp_substeps(unsigned int n_substeps, unsigned int n_stripes_in_range) {
+    if (n_stripes_in_range < 1) n_stripes_in_range = 1;  // an empty table is rejected upstream
+    if (n_substeps > n_stripes_in_range) {
+        fprintf(stderr, "More substeps were requested than stripes. Using %u substeps.\n", n_stripes_in_range);
+        return n_stripes_in_range;
+    }
+    if (n_substeps < 1) return 1;
+    return n_substeps;
+}
+
 void set_tasks(std::vector<su::task_parameters> &tasks,
                double alpha,
                unsigned int n_samples,
@@ -466,8 +506,7 @@ void set_tasks(std::vector<su::task_parameters> &tasks,
                unsigned int n_tasks) {
 
     // compute from start to the max possible stripe if stop doesn't make sense
-    if(stripe_stop <= stripe_start)
-        stripe_stop = (n_samples + 1) / 2;
+    stripe_stop = effective_stripe_stop(n_samples, stripe_start, stripe_stop);
 
     /* chunking strategy is to balance as much as possible. eg if there are 15 stripes
      * and 4 threads, our goal is to assign 4 stripes to 3 threads, and 3 stripes to one thread.
@@ -514,10 +553,8 @@ compute_status one_off_inmem_cpp(su::biom_interface &table, const su::BPTree &tr
     std::vector<double*> dm_stripes(stripe_stop);
     std::vector<double*> dm_stripes_total(stripe_stop);
 
-    if(n_substeps > dm_stripes.size()) {
-        fprintf(stderr, "More substeps were requested than stripes. Using %zd substeps.\n", long(dm_stripes.size()));
-        n_substeps = dm_stripes.size();
-    }
+    // whole range, so stripe_start is 0
+    n_substeps = clamp_substeps(n_substeps, stripe_stop);
 
     std::vector<su::task_parameters> tasks(n_substeps);
 
@@ -556,10 +593,11 @@ compute_status partial_v3(const char* biom_filename, const char* tree_filename,
     std::vector<double*> dm_stripes((table.n_samples + 1) / 2);
     std::vector<double*> dm_stripes_total((table.n_samples + 1) / 2);
 
-    if(n_substeps > dm_stripes.size()) {
-        fprintf(stderr, "More substeps were requested than stripes. Using %zd substeps.\n", long(dm_stripes.size()));
-        n_substeps = dm_stripes.size();
-    }
+    /* dm_stripes covers every stripe, but the tasks only divide the requested
+     * sub-range, so that -- not dm_stripes.size() -- is what bounds n_substeps.
+     */
+    n_substeps = clamp_substeps(n_substeps,
+                                effective_stripe_stop(table.n_samples, stripe_start, stripe_stop) - stripe_start);
 
     std::vector<su::task_parameters> tasks(n_substeps);
 
@@ -677,6 +715,9 @@ compute_status one_off_matrix_T(su::biom_interface &table, const su::BPTree &tre
       std::vector<double*> dm_stripes(stripe_stop);
       std::vector<double*> dm_stripes_total(stripe_stop);
 
+      // whole range, so stripe_start is 0
+      n_substeps = clamp_substeps(n_substeps, stripe_stop);
+
       std::vector<su::task_parameters> tasks(n_substeps);
 
       set_tasks(tasks, alpha, table.n_samples, 0, stripe_stop, bypass_tips, normalize_sample_counts, n_substeps);
@@ -717,19 +758,34 @@ compute_status one_off_matrix_T(su::biom_interface &table, const su::BPTree &tre
 
 
 template<class TReal, class TMat>
-compute_status one_off_matrix_v3_T(su::biom_inmem &table, const su::BPTree &tree,
+compute_status one_off_matrix_v4_T(su::biom_inmem &table, const su::BPTree &tree,
                                    const char* unifrac_method, bool variance_adjust, double alpha,
                                    bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                   unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                   unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                   const char *mmap_dir,
                                    TMat** result) {
-    SETUP_TDBG("one_off_matrix_inmem_v3")
+    SETUP_TDBG("one_off_matrix_inmem_v4")
     if (subsample_depth>0) {
-        su::skbio_biom_subsampled table_subsampled(table, subsample_with_replacement, subsample_depth);
-        if ((table_subsampled.n_samples==0) || (table_subsampled.n_obs==0)) {
+        /* Same seeding rule as subsample_table_inmem_seeded():
+         *   seed >= 0  deterministic draw from the explicit seed, touching no
+         *              shared state, so concurrent callers do not need a lock
+         *   seed <  0  skbio_biom_subsampled draws from the process-global
+         *              mt19937 that ssu_set_random_seed() sets, which is the
+         *              legacy behaviour
+         * The two branches differ in type, so hold the result by base pointer;
+         * one_off_matrix_T takes a biom_interface&.
+         */
+        std::unique_ptr<su::biom_inmem> table_subsampled;
+        if (seed < 0) {
+            table_subsampled.reset(new su::skbio_biom_subsampled(table, subsample_with_replacement, subsample_depth));
+        } else {
+            table_subsampled.reset(new su::biom_subsampled(table, subsample_with_replacement, subsample_depth, (uint32_t) seed));
+        }
+        if ((table_subsampled->n_samples==0) || (table_subsampled->n_obs==0)) {
            return table_empty;
         }
         TDBG_STEP("subsample")
-        return one_off_matrix_T<TReal,TMat>(table_subsampled,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,mmap_dir,result);
+        return one_off_matrix_T<TReal,TMat>(*table_subsampled,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,mmap_dir,result);
     } else {
         return one_off_matrix_T<TReal,TMat>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,mmap_dir,result);
     }
@@ -746,7 +802,7 @@ compute_status one_off_matrix_v3(const char* biom_filename, const char* tree_fil
     CHECK_FILE(tree_filename, tree_missing)
     PARSE_TREE_TABLE(tree_filename, biom_filename)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 
 compute_status one_off_matrix_fp32_v3(const char* biom_filename, const char* tree_filename,
@@ -759,7 +815,7 @@ compute_status one_off_matrix_fp32_v3(const char* biom_filename, const char* tre
     CHECK_FILE(tree_filename, tree_missing)
     PARSE_TREE_TABLE(tree_filename, biom_filename)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 
 /* As above, but from a pre-loaded tree object */
@@ -775,7 +831,7 @@ compute_status one_off_matrix_v3t(const char* biom_filename, const opaque_bptree
     su::biom table(biom_filename);
     VALIDATE_TREE_TABLE(tree, table)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 
 compute_status one_off_matrix_fp32_v3t(const char* biom_filename, const opaque_bptree_t* tree_data,
@@ -790,16 +846,23 @@ compute_status one_off_matrix_fp32_v3t(const char* biom_filename, const opaque_b
     su::biom table(biom_filename);
     VALIDATE_TREE_TABLE(tree, table)
     TDBG_STEP("load_files")
-    return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,mmap_dir,result);
 }
 #endif // UNIFRAC_WASM (file-based one_off_matrix wrappers)
 
-compute_status one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+compute_status one_off_matrix_inmem_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                        const char* unifrac_method, bool variance_adjust, double alpha,
                                        bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                       unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                       unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                       int device_id, const char *mmap_dir,
                                        mat_full_fp64_t** result) {
     SETUP_TDBG("one_off_matrix_inmem")
+    /* Device-resident input and output are not implemented. Rejected before any
+     * work so a caller that asks cannot mistake a host-computed answer for a
+     * device-computed one.
+     */
+    if (device_id >= 0) return unsupported_device;
+
     bool fp64;
     compute_status rc = is_fp64_method(unifrac_method, fp64);
 
@@ -830,15 +893,31 @@ compute_status one_off_matrix_inmem_v3(const support_biom_t *table_data, const s
 
     VALIDATE_TREE_TABLE(tree,table)
 
-    return one_off_matrix_v3_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<double,mat_full_fp64_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,seed,mmap_dir,result);
 }
 
-compute_status one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+/* Superseded by v4, but implemented here rather than in api_compat.hpp: this is
+ * one of the entry points ../combined/libssu.c resolves by dlsym, and that
+ * dispatcher loads a variant versioned independently of itself.
+ */
+compute_status one_off_matrix_inmem_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                       const char* unifrac_method, bool variance_adjust, double alpha,
+                                       bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                       unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                       mat_full_fp64_t** result) {
+    return one_off_matrix_inmem_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,/*device_id*/ -1,mmap_dir,result);
+}
+
+compute_status one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
                                             const char* unifrac_method, bool variance_adjust, double alpha,
                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
-                                            unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                            unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                            int device_id, const char *mmap_dir,
                                             mat_full_fp32_t** result) {
     SETUP_TDBG("one_off_matrix_inmem_fp32")
+    // see one_off_matrix_inmem_v4
+    if (device_id >= 0) return unsupported_device;
+
     bool fp64;
     compute_status rc = is_fp64_method(unifrac_method, fp64);
 
@@ -869,7 +948,16 @@ compute_status one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, co
 
     VALIDATE_TREE_TABLE(tree,table)
 
-    return one_off_matrix_v3_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,mmap_dir,result);
+    return one_off_matrix_v4_T<float,mat_full_fp32_t>(table,tree,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,seed,mmap_dir,result);
+}
+
+// see one_off_matrix_inmem_v3
+compute_status one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                            const char* unifrac_method, bool variance_adjust, double alpha,
+                                            bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                            unsigned int subsample_depth, bool subsample_with_replacement, const char *mmap_dir,
+                                            mat_full_fp32_t** result) {
+    return one_off_matrix_inmem_fp32_v4(table_data,tree_data,unifrac_method,variance_adjust,alpha,bypass_tips,normalize_sample_counts,n_substeps,subsample_depth,subsample_with_replacement,/*seed*/ -1,/*device_id*/ -1,mmap_dir,result);
 }
 
 compute_status faith_pd_inmem(const support_biom_t *table_data,
@@ -1016,22 +1104,40 @@ void destroy_subsampled_inmem(opaque_biom_inmem_t **t) {
     delete sub;
 }
 
+compute_status compute_permanova_inmem_fp64_seeded(const double *mat, unsigned int n_dims,
+                                                    const uint32_t *grouping,
+                                                    unsigned int permanova_perms,
+                                                    int seed,
+                                                    double *fstat, double *pvalue) {
+    if (mat == NULL || grouping == NULL) return grouping_missing;
+    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue, seed);
+    return okay;
+}
+
+compute_status compute_permanova_inmem_fp32_seeded(const float *mat, unsigned int n_dims,
+                                                    const uint32_t *grouping,
+                                                    unsigned int permanova_perms,
+                                                    int seed,
+                                                    float *fstat, float *pvalue) {
+    if (mat == NULL || grouping == NULL) return grouping_missing;
+    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue, seed);
+    return okay;
+}
+
 compute_status compute_permanova_inmem_fp64(const double *mat, unsigned int n_dims,
                                              const uint32_t *grouping,
                                              unsigned int permanova_perms,
                                              double *fstat, double *pvalue) {
-    if (mat == NULL || grouping == NULL) return grouping_missing;
-    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
-    return okay;
+    return compute_permanova_inmem_fp64_seeded(mat, n_dims, grouping, permanova_perms,
+                                               -1, fstat, pvalue);
 }
 
 compute_status compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims,
                                              const uint32_t *grouping,
                                              unsigned int permanova_perms,
                                              float *fstat, float *pvalue) {
-    if (mat == NULL || grouping == NULL) return grouping_missing;
-    su::permanova(mat, n_dims, grouping, permanova_perms, *fstat, *pvalue);
-    return okay;
+    return compute_permanova_inmem_fp32_seeded(mat, n_dims, grouping, permanova_perms,
+                                               -1, fstat, pvalue);
 }
 
 /*
@@ -1150,9 +1256,11 @@ inline compute_status compute_permanova_T(const char *grouping_filename, unsigne
          return grouping_missing;
        }
 
+       // seed < 0: the file-based permanova path has no per-call seed and is
+       // documented as concurrency-unsafe in README.md
        su::permanova(result->matrix, n_samples,
                      grouping, permanova_perms,
-                     fstats[i], pvalues[i]);
+                     fstats[i], pvalues[i], /*seed*/ -1);
      }
      delete[] grouping;
 
@@ -1551,7 +1659,9 @@ public:
          TReal * samples;
          TReal * proportion_explained;
 
-         su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained);
+         // seed < 0: this path has no per-call seed and is documented as
+         // concurrency-unsafe in README.md
+         su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained, /*seed*/ -1);
          TDBG_STEP("pcoa computed")
 
          char fmtstr2[64];
@@ -2023,7 +2133,8 @@ inline IOStatus write_mat_from_matrix_hdf5_T(const char* output_filename, TMat *
      TReal * samples;
      TReal * proportion_explained;
 
-     su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained);
+     // see the note on the other pcoa_inplace call site
+     su::pcoa_inplace(result->matrix, n_samples, pcoa_dims, eigenvalues, samples, proportion_explained, /*seed*/ -1);
      TDBG_STEP("pcoa computed")
 
 
@@ -2725,15 +2836,27 @@ void find_eigens_fast_fp32(const uint32_t n_samples, const uint32_t n_dims, floa
 // samples     - out, alocated buffer of size n_dims x n_samples
 // proportion_explained - out, allocated buffer of size n_dims
 
+void pcoa_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, double * *eigenvalues, double * *samples, double * *proportion_explained) {
+  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained, seed);
+}
+
+void pcoa_fp32_seeded(const float * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained) {
+  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained, seed);
+}
+
+void pcoa_mixed_seeded(const double * mat, const uint32_t n_samples, const uint32_t n_dims, int seed, float * *eigenvalues, float * *samples, float * *proportion_explained) {
+  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained, seed);
+}
+
 void pcoa(const double * mat, const uint32_t n_samples, const uint32_t n_dims, double * *eigenvalues, double * *samples, double * *proportion_explained) {
-  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained);
+  pcoa_seeded(mat, n_samples, n_dims, -1, eigenvalues, samples, proportion_explained);
 }
 
 void pcoa_fp32(const float * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained) {
-  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained);
+  pcoa_fp32_seeded(mat, n_samples, n_dims, -1, eigenvalues, samples, proportion_explained);
 }
 
 void pcoa_mixed(const double * mat, const uint32_t n_samples, const uint32_t n_dims, float * *eigenvalues, float * *samples, float * *proportion_explained) {
-  su::pcoa(mat, n_samples, n_dims, *eigenvalues, *samples, *proportion_explained);
+  pcoa_mixed_seeded(mat, n_samples, n_dims, -1, eigenvalues, samples, proportion_explained);
 }
 

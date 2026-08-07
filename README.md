@@ -203,6 +203,86 @@ To restrict the number of cores used, set:
 
     export OMP_NUM_THREADS=nthreads
 
+## Calling the library concurrently
+
+The `ssu` and `faithpd` tools run one compute at a time, but the shared library
+can be loaded into a host process — a server, a notebook session — that wants
+several independent computes in flight at once. This section is the contract for
+that case. It applies to the CPU builds; **GPU/ACC builds are not covered**, as
+concurrent computes there share one device and one default queue.
+
+**Safe to call concurrently from several threads of one process,** each with
+`seed >= 0` where it takes a seed:
+
+- `one_off_matrix_inmem_v4` / `_fp32_v4`; also `_v3` / `_v2` and `one_off_inmem*`
+  when `subsample_depth == 0`, since then nothing is drawn
+- `faith_pd_inmem`
+- `subsample_table_inmem_seeded`, and the `subsampled_*` accessors on distinct
+  objects
+- `pcoa_seeded` / `_fp32_seeded` / `_mixed_seeded`,
+  `compute_permanova_inmem_fp64_seeded` / `_fp32_seeded`
+
+Inputs are read, never written, so concurrent calls may share a table, a tree or
+a distance matrix. Each call allocates its own result.
+
+**Not safe — these reach process-global RNG state:**
+
+- `ssu_set_random_seed`, and every non-seeded form, each of which is defined as
+  its seeded form at `seed = -1`. Pass a non-negative seed instead of seeding
+  globally; that is what the seeded entry points are for.
+- The file-writing entry points (`unifrac_to_file*`, `write_mat*`) and
+  `find_eigens_fast*`, which pass `seed = -1` internally. Threading a seed
+  through `find_eigens_fast*` is a small change if a consumer needs it; nothing
+  in this repository calls it.
+
+Two traps worth knowing, even single-threaded:
+
+- `ssu_set_random_seed` drives *two* chained generators — it reseeds this
+  library's `std::mt19937`, then draws once from it to seed scikit-bio-binaries'
+  own global one. Any `seed < 0` call landing in between desynchronizes the
+  sequence and silently breaks reproducibility.
+- The `pcoa*` names, seeded and not, have C++ linkage and no dispatcher wrapper,
+  so they link only against `src/libssu.so` or one of the static archives, not
+  against the installed dispatcher. The `compute_permanova_inmem_*` family,
+  seeded and not, is `EXTERN` and reachable either way.
+
+**Ordination reproduces to a tolerance, not bit-exactly.** A concurrent
+`one_off_matrix_inmem_*` is bit-identical to the serial answer; a concurrent
+`pcoa*_seeded` is not, because its parallel reductions are not order-pinned —
+2.8e-16 measured on the 6-sample fixture, against ~0.5 for a changed seed. A
+PERMANOVA p-value is a rank over `n_perm + 1` values, counting the unpermuted
+one, so it instead either holds or steps by `1/(n_perm + 1)`. Reproducible, but
+not a bitwise cache key. On a GPU one of those steps is already spent on
+[scikit-bio-binaries#15](https://github.com/scikit-bio/scikit-bio-binaries/issues/15).
+
+**A seeded PERMANOVA also reproduces per thread count, not across thread
+counts,** for a different reason than the subsample below. scikit-bio-binaries
+sizes its permutation chunk as `2 * omp_get_max_threads() * 16`, so the calling
+thread's OpenMP width selects the chunking, and the chunking selects the
+permutation set. On the 6-sample fixture at `seed = 7`, width 1 gives `p = 0.55`
+and every width `>= 2` gives `p = 0.49`. Concurrent callers sharing a width are
+unaffected; treat a p-value as reproducible only per `(seed, width)` pair.
+
+**A seeded subsample reproduces per thread count, not across thread counts.**
+The draw is distributed across the OpenMP team, so team size changes the result:
+on `src/test.biom` at `seed = 42`, widths 1, 2 and 4 agree and width 8 differs.
+Concurrent callers sharing a width are unaffected; a caller that varies width per
+query should treat results as reproducible only per `(seed, width)` pair.
+
+**Choosing a thread count per call.** There is no `n_threads` argument; fan-out
+is OpenMP's. `omp_set_num_threads()` sets `nthreads-var`, which the spec scopes
+to the calling task, so **each of your threads can pick its own width without
+disturbing the others** — set it on the calling thread rather than serializing to
+protect it. W concurrent computes each get a full team, so choose widths that sum
+to the cores you have.
+
+**Detection caches.** The first compute lazily fills non-atomic `static int`s
+recording which accelerator and CPU variant to use (`proc_use_acc`,
+`skbio_use_acc`, and one in the dependency), so concurrent first calls race on
+them. Benign — detection is a pure function of the environment and every writer
+stores the same value — but a sanitizer will flag it, and with `UNIFRAC_GPU_INFO`
+or `UNIFRAC_CPU_INFO` set the informational lines can interleave.
+
 ## Older CPU support
 
 On Linux platforms, Unifrac will auto-detect the CPU generation, i.e. if it supports avx or avx2 vector instructions.
@@ -221,9 +301,12 @@ To disable GPU offload, and thus force CPU-only execution, one can set:
 
     export UNIFRAC_USE_GPU=N
 
-To disable GPU offload only for the post-unifrac tools, e.g. PERMANOVA, one can set:
+To disable GPU offload only for the post-unifrac tools, e.g. PERMANOVA, one can
+set scikit-bio-binaries' own variable:
 
-    export UNIFRAC_SKBIO_USE_GPU=N
+    export SKBB_USE_GPU=N
+
+Both are latched on the first compute, so set them before it, not between calls.
 
 To check which code path is used (Unifrac will print it to standard output at runtime), set:
 

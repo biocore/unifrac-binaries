@@ -125,7 +125,9 @@ jobs:
           unset DEBUG_CFLAGS
           # the r-base package has a broken dependency
           ln -s $CONDA_PREFIX/lib/libreadline.so $CONDA_PREFIX/lib/libreadline.so.6
-          R -e 'install.packages("Rcpp", repos="http://lib.stat.cmu.edu/R/CRAN/")'
+          # a CDN, not a single university mirror: one stale PACKAGES index
+          # there makes Rcpp look unavailable and fails whichever legs hit it
+          R -e 'install.packages("Rcpp", repos="https://cloud.r-project.org")'
           make rapi_test
         fi
         popd
@@ -137,6 +139,77 @@ jobs:
         export OMP_NUM_THREADS=2
         pushd ci
         ./crawford_test.sh
+        popd
+
+  # ----------------------------------------------------------------------
+  # Native in-memory static-archive job. Builds libssu_inmem.a -- the
+  # artifact downstream embedders link (see src/inmem_build.mk) -- and runs
+  # the concurrency suite against it.
+  #
+  # Nothing else in CI builds this archive, and it is a configuration all its
+  # own: UNIFRAC_WASM is defined, yet unlike the WASM build it is genuinely
+  # multi-threaded. The suite in src/test_su.cpp covers the same entry points,
+  # but only as compiled for libssu.so.
+  #
+  # skbb comes from conda-forge, headers and library from the same package,
+  # so this job needs no second checkout.
+  #
+  # A TSan gate added here would need OMP_NUM_THREADS=1: uninstrumented libgomp
+  # yields ~145 findings at width 4 even with a single caller thread, and none
+  # at width 1.
+  build-and-test-inmem:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        miniconda-version: "latest"
+        auto-update-conda: true
+    - name: Install
+      shell: bash -l {0}
+      run: |
+        cplatform=`conda info |awk '/platform/{print $3}'`
+        echo "Conda platform: ${cplatform}"
+        conda create -q --yes --strict-channel-priority -n unifrac-inmem \
+              -c conda-forge gxx_${cplatform} scikit-bio-binaries make
+        conda clean --yes -t
+    - name: Build archive
+      shell: bash -l {0}
+      run: |
+        conda activate unifrac-inmem
+        $CXX -v
+        pushd src
+        make -j$(nproc) inmem_static INMEM_SKBB_EXTERN=$CONDA_PREFIX/include/scikit-bio-binaries
+        # the archive must actually export what embedders call, including the
+        # seeded v4 entries -- a dropped TU would otherwise surface downstream
+        nm -g  --defined-only libssu_inmem.a > /tmp/inmem_syms
+        nm -gC --defined-only libssu_inmem.a > /tmp/inmem_syms_demangled
+        # EXTERN "C" entries: the symbol name is the whole name
+        for sym in one_off_matrix_inmem_fp32_v3 one_off_matrix_inmem_fp32_v4 \
+                   one_off_matrix_inmem_v3 one_off_matrix_inmem_v4 faith_pd_inmem \
+                   compute_permanova_inmem_fp64_seeded \
+                   compute_permanova_inmem_fp32_seeded; do
+          grep -q " T ${sym}$" /tmp/inmem_syms \
+            || { echo "MISSING SYMBOL: ${sym}"; exit 2; }
+        done
+        # pcoa* carry C++ linkage, matching the non-seeded pcoa* they extend, so
+        # the archive holds mangled names. Match the demangled signature instead
+        # -- still a real check that the TU is present, just spelled correctly.
+        for sym in pcoa_seeded pcoa_fp32_seeded pcoa_mixed_seeded; do
+          grep -q " T ${sym}(" /tmp/inmem_syms_demangled \
+            || { echo "MISSING SYMBOL: ${sym}"; exit 2; }
+        done
+        popd
+    - name: Concurrency tests
+      shell: bash -l {0}
+      run: |
+        conda activate unifrac-inmem
+        # keep it low for runs in containers
+        # and a weird number to potentially catch potential bugs
+        export OMP_NUM_THREADS=3
+        pushd src
+        make -j$(nproc) inmem_test INMEM_SKBB_EXTERN=$CONDA_PREFIX/include/scikit-bio-binaries
+        make -j$(nproc) inmem_test_asan INMEM_SKBB_EXTERN=$CONDA_PREFIX/include/scikit-bio-binaries
         popd
 
   # ----------------------------------------------------------------------

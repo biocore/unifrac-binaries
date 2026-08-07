@@ -47,3 +47,32 @@ src/unifrac_accapi_cpu.cpp
 src/unifrac_task_noclass_cpu.cpp
 src/unifrac_accapi.cpp
 src/unifrac_task.cpp
+
+# Generated accelerator translation units, same generators
+src/unifrac_accapi_acc_*.cpp
+src/unifrac_task_noclass_acc_*.cpp
+src/unifrac_accapi_dyn_acc_*.h
+src/unifrac_task_api_acc_*.h
+
+# Built binaries. None of these have a suffix, so they need naming.
+src/ssu
+src/faithpd
+src/test_su
+src/test_su_api
+src/test_ska
+src/test_api
+src/test_concurrency_inmem
+src/test_concurrency_inmem_asan
+src/generate_*_expected
+test/capi_test
+test/capi_inmem_test
+
+# Emscripten default output, if someone runs emcc without -o
+src/a.out.js
+
+# Outputs that ci/crawford_test.sh writes into its own directory
+ci/test.*.dm
+ci/test.dm*
+ci/test.vaw.dm*
+ci/test.faith*.obs
+ci/test.ssu*.exp.f4

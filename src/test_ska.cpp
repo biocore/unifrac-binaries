@@ -2,6 +2,7 @@
 #include "skbio_alt.hpp"
 #include "api.hpp"
 #include <unistd.h>
+#include <vector>
 #include "test_helper.hpp"
 
 void test_center_mat() {
@@ -464,6 +465,107 @@ void test_pcoa_big() {
     SUITE_END();
 }
 
+/* PCoA draws a random matrix for the randomized SVD. With an explicit seed that
+ * draw comes from a generator local to the call, so the answer is reproducible
+ * without touching -- or being disturbed by -- the process-global generator.
+ * That is what makes several PCoAs in flight at once possible. A negative seed
+ * keeps the legacy behaviour of drawing from the global generator that
+ * su::set_random_seed() sets.
+ */
+static double max_abs_diff(const std::vector<double> &a, const std::vector<double> &b) {
+    if (a.size() != b.size()) return 1.0/0.0;
+    double m = 0.0;
+    for (size_t i = 0; i < a.size(); i++) m = std::max(m, fabs(a[i] - b[i]));
+    return m;
+}
+
+static std::vector<double> run_seeded_pcoa(const double *mat, uint32_t n_samples,
+                                           uint32_t n_dims, int seed) {
+    double *eigenvalues = NULL, *samples = NULL, *proportion_explained = NULL;
+    su::pcoa(mat, n_samples, n_dims, eigenvalues, samples, proportion_explained, seed);
+
+    std::vector<double> out;
+    out.insert(out.end(), eigenvalues, eigenvalues + n_dims);
+    out.insert(out.end(), samples, samples + (size_t(n_dims) * n_samples));
+    out.insert(out.end(), proportion_explained, proportion_explained + n_dims);
+    free(eigenvalues);
+    free(samples);
+    free(proportion_explained);
+    return out;
+}
+
+static double run_seeded_permanova(const double *mat, uint32_t n_samples,
+                                   const uint32_t *grouping, unsigned int n_perm, int seed) {
+    double fstat = 0., pvalue = 0.;
+    su::permanova(mat, n_samples, grouping, n_perm, fstat, pvalue, seed);
+    return pvalue;
+}
+
+void test_pcoa_seeded() {
+    SUITE_START("test pcoa seeded");
+
+    // unweighted unifrac of crawford.biom, as in test_pcoa
+    const double matrix[] = {
+      0.         , 0.71836067 , 0.71317361 , 0.69746044 , 0.62587207 , 0.72826674
+    , 0.72065895 , 0.72640581 , 0.73606053,
+      0.71836067 , 0.         , 0.70302967 , 0.73407301 , 0.6548042  , 0.71547381
+    , 0.78397813 , 0.72318399 , 0.76138933,
+      0.71317361 , 0.70302967 , 0.         , 0.61041275 , 0.62331299 , 0.71848305
+    , 0.70416337 , 0.75258475 , 0.79249029,
+      0.69746044 , 0.73407301 , 0.61041275 , 0.         , 0.6439278  , 0.70052733
+    , 0.69832716 , 0.77818938 , 0.72959894,
+      0.62587207 , 0.6548042  , 0.62331299 , 0.6439278  , 0.         , 0.75782689
+    , 0.71005144 , 0.75065046 , 0.78944369,
+      0.72826674 , 0.71547381 , 0.71848305 , 0.70052733 , 0.75782689 , 0.
+    , 0.63593642 , 0.71283615 , 0.58314638,
+      0.72065895 , 0.78397813 , 0.70416337 , 0.69832716 , 0.71005144 , 0.63593642
+    , 0.         , 0.69200762 , 0.68972056,
+      0.72640581 , 0.72318399 , 0.75258475 , 0.77818938 , 0.75065046 , 0.71283615
+    , 0.69200762 , 0.         , 0.71514083,
+      0.73606053 , 0.76138933 , 0.79249029 , 0.72959894 , 0.78944369 , 0.58314638
+    , 0.68972056 , 0.71514083 , 0. };
+
+    const uint32_t n_samples = 9;
+    const uint32_t n_dims    = 5;
+
+    /* Tolerance, not bit-exact -- see "Ordination reproduces to a tolerance" in
+     * README.md. SAME is still far tighter than the signal it discriminates:
+     * changing the seed moves the answer by ~0.5 here, which SEED_DIFF pins.
+     */
+    const double SAME      = 1e-12;
+    const double SEED_DIFF = 1e-6;
+
+    // an explicit seed reproduces, with no seeding call in between
+    std::vector<double> a = run_seeded_pcoa(matrix, n_samples, n_dims, 7);
+    std::vector<double> b = run_seeded_pcoa(matrix, n_samples, n_dims, 7);
+    ASSERT(max_abs_diff(a, b) < SAME);
+
+    // ... and is not perturbed by the global generator moving underneath it
+    su::set_random_seed(999);
+    std::vector<double> c = run_seeded_pcoa(matrix, n_samples, n_dims, 7);
+    ASSERT(max_abs_diff(a, c) < SAME);
+
+    // a different seed gives a different draw, so the seed is really consumed
+    std::vector<double> d = run_seeded_pcoa(matrix, n_samples, n_dims, 8);
+    ASSERT(max_abs_diff(a, d) > SEED_DIFF);
+
+    // a negative seed is the legacy path: same global seed, same answer
+    su::set_random_seed(42);
+    std::vector<double> g1 = run_seeded_pcoa(matrix, n_samples, n_dims, -1);
+    su::set_random_seed(42);
+    std::vector<double> g2 = run_seeded_pcoa(matrix, n_samples, n_dims, -1);
+    ASSERT(max_abs_diff(g1, g2) < SAME);
+
+    // ... and the legacy path really does follow the global generator: a
+    // different global seed gives a different answer, which is precisely why it
+    // cannot be called concurrently
+    su::set_random_seed(4242);
+    std::vector<double> g3 = run_seeded_pcoa(matrix, n_samples, n_dims, -1);
+    ASSERT(max_abs_diff(g1, g3) > SEED_DIFF);
+
+    SUITE_END();
+}
+
 void test_permanova_ties() {
     SUITE_START("test permanova ties");
 
@@ -632,6 +734,64 @@ void test_permanova_unequal() {
                   stat_fp64, pvalue_fp64);
     ASSERT(fabs(stat_fp64 - exp_stat) < 0.00001);
     ASSERT(fabs(pvalue_fp64 - exp_pvalue) < 0.05);
+
+    SUITE_END();
+}
+
+/* Same seeding contract as test_pcoa_seeded, for the permutation draw. Only the
+ * p-value is at stake: the F statistic is computed from the data alone, so it
+ * does not move with the seed.
+ *
+ * The tolerance is looser here, and deliberately so: a p-value is a rank within
+ * the permutation distribution, over n_perm+1 values counting the unpermuted
+ * one, so ULP drift in the observed F either leaves it alone or steps it by
+ * 1/(n_perm+1).
+ */
+void test_permanova_seeded() {
+    SUITE_START("test permanova seeded");
+
+    // Same as skbio tests, as in test_permanova_noties
+    const double matrix[] = {
+      0., 1., 5., 4.,
+      5., 0., 3., 2.,
+      1., 3., 0., 3.,
+      4., 2., 3., 0.};
+
+    const uint32_t grouping[] = { 0, 0, 1, 1};
+    const uint32_t n_samples  = 4;
+    const unsigned int n_perm = 999;
+
+    const double SAME = 1e-2;
+
+    // an explicit seed reproduces, with no seeding call in between
+    const double a = run_seeded_permanova(matrix, n_samples, grouping, n_perm, 7);
+    const double b = run_seeded_permanova(matrix, n_samples, grouping, n_perm, 7);
+    ASSERT(fabs(a - b) < SAME);
+
+    // ... and is not perturbed by the global generator moving underneath it
+    su::set_random_seed(999);
+    const double c = run_seeded_permanova(matrix, n_samples, grouping, n_perm, 7);
+    ASSERT(fabs(a - c) < SAME);
+
+    /* The seed is really consumed. Checked across a spread of seeds rather than
+     * against one alternative: a p-value is a rank out of n_perm+1, so any two
+     * seeds can legitimately land on the same one. Requiring that *some* seed
+     * disagrees keeps the assertion honest without making it a coin flip.
+     */
+    {
+        unsigned int differing = 0;
+        for (int s = 8; s <= 12; s++)
+            if (fabs(run_seeded_permanova(matrix, n_samples, grouping, n_perm, s) - a) > SAME)
+                differing++;
+        ASSERT(differing > 0);
+    }
+
+    // a negative seed is the legacy path: same global seed, same answer
+    su::set_random_seed(42);
+    const double g1 = run_seeded_permanova(matrix, n_samples, grouping, n_perm, -1);
+    su::set_random_seed(42);
+    const double g2 = run_seeded_permanova(matrix, n_samples, grouping, n_perm, -1);
+    ASSERT(fabs(g1 - g2) < SAME);
 
     SUITE_END();
 }
@@ -921,9 +1081,11 @@ int main(int argc, char** argv) {
     test_pcoa();
     // The following test is unstable, disable for now
     // test_pcoa_big();
+    test_pcoa_seeded();
     test_permanova_ties();
     test_permanova_noties();
     test_permanova_unequal();
+    test_permanova_seeded();
     test_subsample_replacement();
     test_subsample_replacement_limit();
     test_subsample_woreplacement();

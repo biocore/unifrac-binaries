@@ -4,7 +4,6 @@
 #include <string>
 #include <iomanip>
 #include <glob.h>
-#include <signal.h>
 #include "api.hpp"
 #include "cmd.hpp"
 // Using inlined-header-only funtions
@@ -80,17 +79,14 @@ void usage() {
     std::cout << "    For Variance Adjusted UniFrac, please see: " << std::endl;
     std::cout << "        Chang et al. BMC Bioinformatics 2011; DOI: 10.1186/1471-2105-12-118" << std::endl;
     std::cout << std::endl;
-    std::cout << "Runtime progress can be obtained by issuing a SIGUSR1 signal. If running with " << std::endl;
-    std::cout << "multiple threads, this signal will only be honored if issued to the master PID. " << std::endl;
-    std::cout << "The report will yield the following information: " << std::endl;
-    std::cout << std::endl;
-    std::cout << "tid:<thread ID> start:<starting stripe> stop:<stopping stripe> k:<postorder node index> total:<number of nodes>" << std::endl;
-    std::cout << std::endl;
-    std::cout << "The proportion of the tree that has been evaluated can be determined from (k / total)." << std::endl;
-    std::cout << std::endl;
 }
 
-const char* compute_status_messages[9] = {"No error.",
+/* Indexed by ComputeStatus, so it needs one entry per enumerator. The bound is
+ * left off and asserted instead: status_enum.hpp is append-only for ABI, so a
+ * status appended without a matching entry here would leave this table short by
+ * one and turn any error report for it into an out-of-bounds read.
+ */
+const char* compute_status_messages[] = {"No error.",
                                           "The tree file cannot be found.", 
                                           "The table file cannot be found.",
                                           "The table file contains an empty table.",
@@ -98,7 +94,12 @@ const char* compute_status_messages[9] = {"No error.",
                                           "Table observation IDs are not a subset of the tree tips. This error can also be triggered if a node name contains a single quote (this is unlikely).",
                                           "Error creating the output.",
                                           "The requested method is not supported.",
-                                          "The grouping file cannot be found or does not have the necessary data."};
+                                          "The grouping file cannot be found or does not have the necessary data.",
+                                          "Device-resident input and output are not supported."};
+static_assert(sizeof(compute_status_messages) / sizeof(compute_status_messages[0])
+                  == unsupported_device + 1,
+              "compute_status_messages needs one entry per ComputeStatus; "
+              "unsupported_device must remain the last enumerator");
 
 
 // https://stackoverflow.com/questions/8401777/simple-glob-in-c-on-unix-system
@@ -542,12 +543,6 @@ int mode_multi(const std::string &table_filename, const std::string &tree_filena
     return (status==okay) ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-void ssu_sig_handler(int signo) {
-    if (signo == SIGUSR1) {
-        printf("Status cannot be reported.\n");
-    }
-}
-
 Format get_format(const std::string &format_string, const std::string &method_string, const std::string &mode_string) {
     Format format_val = format_invalid;
     if (format_string.empty()) {
@@ -588,7 +583,6 @@ std::string format2str(Format format_val) {
 }
 
 int main(int argc, char **argv){
-    signal(SIGUSR1, ssu_sig_handler);
     InputParser input(argc, argv);
     if(input.cmdOptionExists("-h") || input.cmdOptionExists("--help") || argc == 1) {
         usage();

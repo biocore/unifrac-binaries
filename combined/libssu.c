@@ -228,6 +228,35 @@ ComputeStatus one_off_matrix_inmem_fp32_v3(const support_biom_t *table_data, con
                                       bypass_tips, normalize_sample_counts, n_substeps, subsample_depth, subsample_with_replacement, mmap_dir, result);
 }
 
+static ComputeStatus (*dl_one_off_matrix_inmem_v4)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
+                                                   bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp64_t**) = NULL;
+static ComputeStatus (*dl_one_off_matrix_inmem_fp32_v4)(const support_biom_t *, const support_bptree_t *, const char*, bool, double,
+                                                        bool, bool, unsigned int, unsigned int, bool, int, int, const char *, mat_full_fp32_t**) = NULL;
+
+ComputeStatus one_off_matrix_inmem_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                             const char* unifrac_method, bool variance_adjust, double alpha,
+                                             bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                             unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                             int device_id, const char *mmap_dir,
+                                             mat_full_fp64_t** result) {
+   cond_ssu_load("one_off_matrix_inmem_v4", (void **) &dl_one_off_matrix_inmem_v4);
+
+   return (*dl_one_off_matrix_inmem_v4)(table_data, tree_data, unifrac_method, variance_adjust, alpha,
+                                 bypass_tips, normalize_sample_counts, n_substeps, subsample_depth, subsample_with_replacement, seed, device_id, mmap_dir, result);
+}
+
+ComputeStatus one_off_matrix_inmem_fp32_v4(const support_biom_t *table_data, const support_bptree_t *tree_data,
+                                                  const char* unifrac_method, bool variance_adjust, double alpha,
+                                                  bool bypass_tips, bool normalize_sample_counts, unsigned int n_substeps,
+                                                  unsigned int subsample_depth, bool subsample_with_replacement, int seed,
+                                                  int device_id, const char *mmap_dir,
+                                                  mat_full_fp32_t** result) {
+   cond_ssu_load("one_off_matrix_inmem_fp32_v4", (void **) &dl_one_off_matrix_inmem_fp32_v4);
+
+   return (*dl_one_off_matrix_inmem_fp32_v4)(table_data, tree_data, unifrac_method, variance_adjust, alpha,
+                                      bypass_tips, normalize_sample_counts, n_substeps, subsample_depth, subsample_with_replacement, seed, device_id, mmap_dir, result);
+}
+
 /*********************************************************************/
 
 static ComputeStatus (*dl_one_off_matrix_v3)(const char*, const char*, const char*, bool, double,
@@ -462,6 +491,34 @@ ComputeStatus compute_permanova_inmem_fp32(const float *mat, unsigned int n_dims
    cond_ssu_load("compute_permanova_inmem_fp32", (void **) &dl_compute_permanova_inmem_fp32);
 
    return (*dl_compute_permanova_inmem_fp32)(mat, n_dims, grouping, permanova_perms, fstat, pvalue);
+}
+
+/* pcoa_seeded / _fp32_seeded / _mixed_seeded are deliberately not dispatched:
+ * they carry C++ linkage, matching the non-seeded pcoa* they extend, and like
+ * those are reachable only by linking src/libssu.so directly.
+ */
+
+static ComputeStatus (*dl_compute_permanova_inmem_fp64_seeded)(const double*, unsigned int, const uint32_t*, unsigned int, int, double*, double*) = NULL;
+static ComputeStatus (*dl_compute_permanova_inmem_fp32_seeded)(const float*, unsigned int, const uint32_t*, unsigned int, int, float*, float*) = NULL;
+
+ComputeStatus compute_permanova_inmem_fp64_seeded(const double *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  int seed,
+                                                  double *fstat, double *pvalue) {
+   cond_ssu_load("compute_permanova_inmem_fp64_seeded", (void **) &dl_compute_permanova_inmem_fp64_seeded);
+
+   return (*dl_compute_permanova_inmem_fp64_seeded)(mat, n_dims, grouping, permanova_perms, seed, fstat, pvalue);
+}
+
+ComputeStatus compute_permanova_inmem_fp32_seeded(const float *mat, unsigned int n_dims,
+                                                  const uint32_t *grouping,
+                                                  unsigned int permanova_perms,
+                                                  int seed,
+                                                  float *fstat, float *pvalue) {
+   cond_ssu_load("compute_permanova_inmem_fp32_seeded", (void **) &dl_compute_permanova_inmem_fp32_seeded);
+
+   return (*dl_compute_permanova_inmem_fp32_seeded)(mat, n_dims, grouping, permanova_perms, seed, fstat, pvalue);
 }
 
 /*********************************************************************/
