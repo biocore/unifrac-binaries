@@ -4,6 +4,7 @@
 
 #include "skbio_alt.hpp"
 #include <stdlib.h> 
+#include <cstdlib>
 
 #include <random>
 #include <algorithm>

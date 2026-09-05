@@ -2,6 +2,7 @@
 
 #include <thread>
 #include <vector>
+#include <functional>
 
 #ifndef API_ONLY
 #include "tree.hpp"

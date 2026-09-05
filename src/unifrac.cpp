@@ -7,6 +7,7 @@
  * See LICENSE file for more details
  */
 
+#include <functional>
 #include "tree.hpp"
 #include "biom_interface.hpp"
 #include "unifrac.hpp"
