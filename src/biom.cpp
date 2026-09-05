@@ -111,7 +111,11 @@ void biom::load_ids(const char *path, std::vector<std::string> &ids) {
     }
 
     DataSet ds_ids = file.openDataSet(path);
-    DataType dtype = ds_ids.getDataType();
+
+    DataType fdtype = ds_ids.getDataType();
+    hid_t dtype_id = H5Tget_native_type(fdtype.getId(), H5T_DIR_ASCEND);
+    DataType dtype(dtype_id);
+
     DataSpace dataspace = ds_ids.getSpace();
 
     hsize_t dims[1];
@@ -144,7 +148,11 @@ void biom::load_indptr(const char *path, std::vector<uint32_t> &indptr) {
     }
 
     DataSet ds = file.openDataSet(path);
-    DataType dtype = ds.getDataType();
+
+    DataType fdtype = ds.getDataType();
+    hid_t dtype_id = H5Tget_native_type(fdtype.getId(), H5T_DIR_ASCEND);
+    DataType dtype(dtype_id);
+
     DataSpace dataspace = ds.getSpace();
 
     hsize_t dims[1];
@@ -178,8 +186,13 @@ unsigned int biom::get_obs_data_direct(const std::string &id, uint32_t *& curren
     hsize_t count[1] = {end - start};
     hsize_t offset[1] = {start};
 
-    DataType indices_dtype = obs_indices.getDataType();
-    DataType data_dtype = obs_data.getDataType();
+    DataType indices_fdtype = obs_indices.getDataType();
+    hid_t indices_dtype_id = H5Tget_native_type(indices_fdtype.getId(), H5T_DIR_ASCEND);
+    DataType indices_dtype(indices_dtype_id);
+
+    DataType data_fdtype = obs_data.getDataType();
+    hid_t data_dtype_id = H5Tget_native_type(data_fdtype.getId(), H5T_DIR_ASCEND);
+    DataType data_dtype(data_dtype_id);
 
     DataSpace indices_dataspace = obs_indices.getSpace();
     DataSpace data_dataspace = obs_data.getSpace();
@@ -223,8 +236,13 @@ unsigned int biom::get_sample_data_direct(const std::string &id, uint32_t *& cur
     hsize_t count[1] = {end - start};
     hsize_t offset[1] = {start};
 
-    DataType indices_dtype = sample_indices.getDataType();
-    DataType data_dtype = sample_data.getDataType();
+    DataType indices_fdtype = sample_indices.getDataType();
+    hid_t indices_dtype_id = H5Tget_native_type(indices_fdtype.getId(), H5T_DIR_ASCEND);
+    DataType indices_dtype(indices_dtype_id);
+
+    DataType data_fdtype = sample_data.getDataType();
+    hid_t data_dtype_id = H5Tget_native_type(data_fdtype.getId(), H5T_DIR_ASCEND);
+    DataType data_dtype(data_dtype_id);
 
     DataSpace indices_dataspace = sample_indices.getSpace();
     DataSpace data_dataspace = sample_data.getSpace();
