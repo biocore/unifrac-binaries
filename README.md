@@ -43,7 +43,7 @@ An example of installing UniFrac, and using it with CPUs as well as GPUs, can be
 
 ## Install (bioconda)
 
-The binaries can be installed through [conda](https://docs.anaconda.com/miniconda/)
+The binaries can be installed through [conda](https://github.com/conda-forge/miniforge)
 via a combination of `conda-forge` and `bioconda` repositories:
 
 ```
@@ -56,7 +56,7 @@ conda activate unifrac
 To install, first the binary needs to be compiled. This assumes that the HDF5 toolchain and libraries are available.
 
 
-**Note**: if you are using [conda](https://docs.anaconda.com/miniconda/) we recommend installing HDF5 and related compiler using the
+**Note**: if you are using [conda](https://github.com/conda-forge/miniforge) we recommend installing HDF5 and related compiler using the
 `conda-forge` channel, for example:
 
 On Linux x86:
